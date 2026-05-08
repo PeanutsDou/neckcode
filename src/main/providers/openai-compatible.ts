@@ -41,6 +41,22 @@ function toApiMessages(messages: Message[]): unknown[] {
       };
     }
 
+    // Handle images: build content array for user messages with attachments
+    if (msg.role === 'user' && Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+      const content: Record<string, unknown>[] = [
+        { type: 'text', text: msg.content },
+      ];
+      for (const att of msg.attachments) {
+        if (att.type === 'image') {
+          content.push({
+            type: 'image_url',
+            image_url: { url: att.data, detail: 'auto' },
+          });
+        }
+      }
+      return { role: 'user', content };
+    }
+
     return { role: msg.role, content: msg.content };
   });
 }

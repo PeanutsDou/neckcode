@@ -4,9 +4,16 @@ export interface ToolCall {
   argumentsText: string;
 }
 
+export interface Attachment {
+  type: 'image';
+  data: string;    // base64 data URI
+  mimeType: string;
+}
+
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  attachments?: Attachment[];
   reasoningContent?: string;
   toolCalls?: ToolCall[];
   toolCallId?: string;

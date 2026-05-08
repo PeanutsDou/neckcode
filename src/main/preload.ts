@@ -4,10 +4,11 @@ console.log('[preload] loading...');
 
 const api = {
   // Agent
-  sendMessage: (text: string) => {
-    return ipcRenderer.invoke('agent:send-message', text);
+  sendMessage: (text: string, attachments?: { type: string; data: string; mimeType: string }[]) => {
+    return ipcRenderer.invoke('agent:send-message', text, attachments || []);
   },
   abort: () => ipcRenderer.invoke('agent:abort'),
+  compare: (text: string, models: string[]) => ipcRenderer.invoke('agent:compare', text, models),
 
   // Agent events
   onDelta: (cb: (text: string) => void) => {
@@ -46,6 +47,16 @@ const api = {
   listDir: (dirPath: string) => ipcRenderer.invoke('fs:list-dir', dirPath),
   readFile: (filePath: string) => ipcRenderer.invoke('fs:read-file', filePath),
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:write-file', filePath, content),
+
+  // Terminal
+  startTerminal: () => ipcRenderer.invoke('terminal:start'),
+  writeTerminal: (text: string) => ipcRenderer.invoke('terminal:write', text),
+  stopTerminal: () => ipcRenderer.invoke('terminal:stop'),
+  onTerminalData: (cb: (data: string) => void) => {
+    const listener = (_: unknown, data: string) => cb(data);
+    ipcRenderer.on('terminal:data', listener);
+    return () => { ipcRenderer.removeListener('terminal:data', listener); };
+  },
 
   // Session persistence
   saveSession: (session: unknown) => ipcRenderer.invoke('session:save', session),

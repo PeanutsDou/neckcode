@@ -10,7 +10,6 @@ interface Props {
 export function TerminalPanel({ visible }: Props) {
   const termRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!visible || !termRef.current) return;
@@ -31,15 +30,24 @@ export function TerminalPanel({ visible }: Props) {
     t.open(termRef.current);
     fit.fit();
 
-    // Try connecting to a local shell via WebSocket (future enhancement)
-    // For now, just show a welcome message
-    t.writeln('\x1b[1;34m=== Terminal ===\x1b[0m');
-    t.writeln('AI shell commands will appear here in real-time.');
-    t.writeln('');
-
     term.current = t;
 
+    // Start shell
+    window.electronAPI.startTerminal().catch(() => {});
+
+    // Listen for shell output
+    const unsub = window.electronAPI.onTerminalData((data: string) => {
+      t.write(data);
+    });
+
+    // Send user input to shell
+    t.onData((data) => {
+      window.electronAPI.writeTerminal(data).catch(() => {});
+    });
+
     return () => {
+      unsub();
+      window.electronAPI.stopTerminal().catch(() => {});
       t.dispose();
       term.current = null;
     };

@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import { dirname, resolve, join } from 'path';
+import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import { getConfig, setConfig, saveConfig } from './config';
@@ -51,7 +52,7 @@ export function setupIpcHandlers(
   getTools: () => ToolRegistry,
 ) {
   // ---- Agent ----
-  ipcMain.handle('agent:send-message', async (_event, message: string) => {
+  ipcMain.handle('agent:send-message', async (_event, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
     const p = getProvider();
     if (!p) throw new Error('No provider configured');
 
@@ -78,6 +79,7 @@ export function setupIpcHandlers(
     try {
       const result = await persistentSession.runUserTurn(
         message,
+        (attachments || []) as { type: 'image'; data: string; mimeType: string }[],
         {
           onDelta(text) {
             getWindow()?.webContents.send('agent:delta', text);
@@ -109,6 +111,28 @@ export function setupIpcHandlers(
       }
       return null;
     }
+  });
+
+  ipcMain.handle('agent:compare', async (_event, message: string, models: string[]) => {
+    const { createAnthropicProvider } = require('./providers/anthropic');
+    const { createOpenAIProvider } = require('./providers/openai-compatible');
+    const results: { model: string; text: string; error?: string }[] = [];
+
+    for (const model of models) {
+      try {
+        const cfg = getConfig();
+        const p: Provider = model.startsWith('claude-')
+          ? createAnthropicProvider({ apiKey: cfg.anthropic.apiKey || process.env.ANTHROPIC_API_KEY || '', model })
+          : createOpenAIProvider({ baseUrl: cfg.deepseek.baseUrl, apiKey: cfg.deepseek.apiKey, model });
+
+        const tempSession = new AgentRuntime(p, getTools(), 1, cfg.systemPrompt);
+        const result = await tempSession.runUserTurn(message, [], { onComplete() {}, onError() {} });
+        results.push({ model, text: result.text });
+      } catch (err) {
+        results.push({ model, text: '', error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return results;
   });
 
   ipcMain.handle('agent:abort', () => {
@@ -247,6 +271,45 @@ export function setupIpcHandlers(
 
   ipcMain.handle('claude-md:get', () => {
     return { content: claudeMdContent };
+  });
+
+  // ---- Terminal ----
+  let termProcess: ChildProcess | null = null;
+
+  ipcMain.handle('terminal:start', () => {
+    if (termProcess) return true;
+
+    const shell = process.platform === 'win32' ? 'powershell.exe' : 'bash';
+    termProcess = spawn(shell, [], {
+      cwd: getConfig().agent.workspaceRoot,
+      env: process.env,
+    });
+
+    termProcess.stdout?.on('data', (data: Buffer) => {
+      getWindow()?.webContents.send('terminal:data', data.toString());
+    });
+
+    termProcess.stderr?.on('data', (data: Buffer) => {
+      getWindow()?.webContents.send('terminal:data', data.toString());
+    });
+
+    termProcess.on('exit', () => {
+      getWindow()?.webContents.send('terminal:data', '\r\n[Process exited]');
+      termProcess = null;
+    });
+
+    return true;
+  });
+
+  ipcMain.handle('terminal:write', (_event, text: string) => {
+    if (termProcess?.stdin?.writable) {
+      termProcess.stdin.write(text);
+    }
+  });
+
+  ipcMain.handle('terminal:stop', () => {
+    termProcess?.kill();
+    termProcess = null;
   });
 }
 

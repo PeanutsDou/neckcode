@@ -382,6 +382,21 @@ html, body, #root {
   font-size: 13px;
 }
 
+.message-attachments {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.message-attachment-img {
+  max-width: 200px;
+  max-height: 160px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  object-fit: contain;
+}
+
 /* ===== Messages ===== */
 
 .message {
@@ -996,6 +1011,82 @@ html, body, #root {
 
 .terminal-container {
   height: 100%;
+}
+
+/* ===== Model Compare ===== */
+
+.compare-overlay {
+  position: fixed;
+  inset: 50px 0 0 0;
+  background: var(--bg-primary);
+  z-index: 500;
+  display: flex;
+}
+
+.compare-dialog {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.compare-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.compare-header h3 {
+  font-size: 16px;
+  color: var(--accent);
+}
+
+.compare-model-selects {
+  display: flex;
+  gap: 8px;
+}
+
+.compare-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.compare-results {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.compare-column {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.compare-model-name {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-dim);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-model-result {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 /* ===== Scrollbar ===== */

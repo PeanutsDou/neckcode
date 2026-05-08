@@ -6,8 +6,9 @@ export interface FileEntry {
 
 export interface ElectronAPI {
   // Agent
-  sendMessage: (text: string) => Promise<unknown>;
+  sendMessage: (text: string, attachments?: { type: string; data: string; mimeType: string }[]) => Promise<unknown>;
   abort: () => Promise<void>;
+  compare: (text: string, models: string[]) => Promise<{ model: string; text: string; error?: string }[]>;
 
   // Agent events (returns unsubscribe function)
   onDelta: (cb: (text: string) => void) => () => void;

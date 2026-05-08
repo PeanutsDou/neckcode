@@ -4,6 +4,7 @@ export interface ChatEntry {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
+  attachments?: { type: string; data: string; name: string; size: number }[];
   toolName?: string;
   toolArgs?: string;
   toolResult?: string;

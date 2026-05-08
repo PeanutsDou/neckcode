@@ -38,10 +38,30 @@ function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
         }] as unknown as Anthropic.ContentBlock[],
       });
     } else if (msg.role === 'user') {
-      result.push({
-        role: 'user',
-        content: msg.content,
-      });
+      if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+        const blocks = msg.content
+          ? [{ type: 'text', text: msg.content }]
+          : [];
+        for (const att of msg.attachments) {
+          if (att.type === 'image') {
+            // Extract base64 data and media type from data URI
+            const match = att.data.match(/^data:([^;]+);base64,(.+)$/);
+            const mediaType = match ? match[1] : 'image/png';
+            const base64data = match ? match[2] : att.data;
+            (blocks as Record<string, unknown>[]).push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: mediaType,
+                data: base64data,
+              },
+            });
+          }
+        }
+        result.push({ role: 'user', content: blocks as unknown as Anthropic.ContentBlock[] });
+      } else {
+        result.push({ role: 'user', content: msg.content });
+      }
     }
   }
 

@@ -8,6 +8,7 @@ import { SessionList } from './components/SessionList';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ContextBar } from './components/ContextBar';
 import { TerminalPanel } from './components/TerminalPanel';
+import { ModelCompare } from './components/ModelCompare';
 import { useAppStore } from './stores/app-store';
 
 class ErrorBoundary extends Component<
@@ -57,6 +58,7 @@ export default function App() {
             <button className={`toolbar-btn ${showTerminal ? 'active' : ''}`} onClick={toggleTerminal} title="Terminal">
               &#x1F4BB;
             </button>
+            <ModelCompare />
             <button className="toolbar-btn" onClick={() => setSettingsOpen(true)} title="Settings">
               &#x2699;
             </button>

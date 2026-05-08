@@ -1,5 +1,5 @@
 import { ChatSession } from './session';
-import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message } from './types';
+import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message, Attachment } from './types';
 
 export interface Provider {
   runStep(params: {
@@ -32,9 +32,17 @@ export class AgentRuntime {
     this.session.clear();
   }
 
-  async runUserTurn(userMessage: string, callbacks: AgentCallbacks, signal?: AbortSignal): Promise<RunStepResult> {
+  async runUserTurn(userMessage: string, attachments: Attachment[], callbacks: AgentCallbacks, signal?: AbortSignal): Promise<RunStepResult> {
     const checkpoint = this.session.createCheckpoint();
-    this.session.addUserMessage(userMessage);
+    this.session.addUserMessage(userMessage, attachments);
+
+    // Auto-compact if exceeding 80% of context limit (1M for deepseek, 200K for claude)
+    const estimatedTokens = this.session.estimateTokens();
+    const contextLimit = 1_000_000; // Conservative default
+    if (estimatedTokens > contextLimit * 0.8) {
+      this.session.compact(5); // Keep last 5 pairs
+      callbacks.onDelta?.('[Context compacted] ');
+    }
 
     try {
       for (let turn = 0; turn < this.maxTurns; turn++) {

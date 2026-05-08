@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAppStore } from '../stores/app-store';
 
 interface Props {
   open: boolean;
@@ -19,6 +20,9 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [model, setModel] = useState('deepseek-v4-pro');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [maxTurns, setMaxTurns] = useState(8);
+  const [contextLimit, setContextLimit] = useState('');
+
+  const setContextLimitStore = useAppStore(s => s.setContextLimit);
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -42,6 +46,8 @@ export function SettingsDialog({ open, onClose }: Props) {
       await window.electronAPI.setConfig('model', model);
       await window.electronAPI.setConfig('maxTurns', maxTurns);
       await window.electronAPI.setConfig('systemPrompt', systemPrompt);
+      const limit = parseInt(contextLimit) || 0;
+      setContextLimitStore(limit > 0 ? limit : null);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -115,6 +121,12 @@ export function SettingsDialog({ open, onClose }: Props) {
                 <input type="number" className="settings-input"
                   value={maxTurns} onChange={e => setMaxTurns(Number(e.target.value))}
                   min={1} max={50} />
+              </label>
+              <label className="settings-label">
+                Context Limit (tokens, 0 = model default)
+                <input type="number" className="settings-input"
+                  value={contextLimit} onChange={e => setContextLimit(e.target.value)}
+                  placeholder="e.g. 1000000 for 1M" min={0} step={100000} />
               </label>
             </div>
           )}

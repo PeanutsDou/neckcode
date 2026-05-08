@@ -129,7 +129,11 @@ export function ChatInput() {
     }
 
     addEntry({
-      id: Date.now().toString(), role: 'user', content: message, timestamp: Date.now(),
+      id: Date.now().toString(), role: 'user', content: message,
+      attachments: images.length > 0 ? images.map(img => ({
+        type: 'image' as const, data: img.data, name: img.name, size: img.size,
+      })) : undefined,
+      timestamp: Date.now(),
     });
 
     setText('');
@@ -138,7 +142,14 @@ export function ChatInput() {
     setStreaming(true);
 
     try {
-      await window.electronAPI.sendMessage(message);
+      const attachments = images.map(img => ({
+        type: 'image' as const,
+        data: img.data,
+        mimeType: img.data.startsWith('data:image/png') ? 'image/png' :
+                 img.data.startsWith('data:image/jpeg') ? 'image/jpeg' :
+                 img.data.startsWith('data:image/gif') ? 'image/gif' : 'image/png',
+      }));
+      await window.electronAPI.sendMessage(message, attachments);
     } catch (err) {
       useChatStore.getState().setError(err instanceof Error ? err.message : String(err));
     }

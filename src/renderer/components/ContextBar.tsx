@@ -2,9 +2,9 @@ import React from 'react';
 import { useChatStore } from '../stores/chat-store';
 import { useAppStore } from '../stores/app-store';
 
-const MODEL_LIMITS: Record<string, number> = {
-  'deepseek-v4-pro': 128000,
-  'deepseek-v4-flash': 128000,
+const DEFAULT_LIMITS: Record<string, number> = {
+  'deepseek-v4-pro': 1_000_000,
+  'deepseek-v4-flash': 1_000_000,
   'claude-sonnet-4-6': 200000,
   'claude-haiku-4-5': 200000,
 };
@@ -23,7 +23,8 @@ export function ContextBar() {
   }
   totalChars += streamingText.length;
   const tokens = Math.round(totalChars / 4);
-  const limit = MODEL_LIMITS[currentModel] || 128000;
+  const customLimit = useAppStore(e => e.contextLimit);
+  const limit = customLimit || DEFAULT_LIMITS[currentModel] || 128000;
   const pct = Math.min(100, Math.round((tokens / limit) * 100));
 
   const barColor = pct > 80 ? 'var(--error)' : pct > 60 ? 'var(--warning)' : 'var(--accent)';

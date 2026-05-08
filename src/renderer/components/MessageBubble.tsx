@@ -42,6 +42,13 @@ export function MessageBubble({ entry }: Props) {
       <div className="message-role">
         {entry.role === 'user' ? 'You' : entry.role === 'system' ? 'System' : 'Assistant'}
       </div>
+      {entry.attachments && entry.attachments.length > 0 && (
+        <div className="message-attachments">
+          {entry.attachments.map((att, i) => (
+            <img key={i} src={att.data} alt={att.name} className="message-attachment-img" />
+          ))}
+        </div>
+      )}
       <div className="message-content">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {entry.content}
