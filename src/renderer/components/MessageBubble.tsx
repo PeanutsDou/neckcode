@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatEntry } from '../stores/chat-store';
 import { DiffPreview } from './DiffPreview';
+import { MermaidBlock } from './MermaidBlock';
 
 interface Props {
   entry: ChatEntry;
@@ -10,7 +11,6 @@ interface Props {
 
 export function MessageBubble({ entry }: Props) {
   if (entry.role === 'tool') {
-    // Check if this is an edit_file diff result
     let diffData: { status: string; file: string; line: number; old: string; new: string } | null = null;
     if (entry.toolName === 'edit_file' && entry.toolResult) {
       try {
@@ -50,7 +50,32 @@ export function MessageBubble({ entry }: Props) {
         </div>
       )}
       <div className="message-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            code({ className, children, ...props }) {
+              const match = /language-(\w+)/.exec(className || '');
+              const lang = match?.[1];
+              const code = String(children).replace(/\n$/, '');
+
+              if (lang === 'mermaid') {
+                return <MermaidBlock code={code} />;
+              }
+
+              // Regular code block
+              if (className) {
+                return (
+                  <pre><code className={className} {...props}>
+                    {children}
+                  </code></pre>
+                );
+              }
+
+              // Inline code
+              return <code {...props}>{children}</code>;
+            },
+          }}
+        >
           {entry.content}
         </ReactMarkdown>
       </div>
