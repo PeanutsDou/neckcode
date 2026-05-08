@@ -3,27 +3,19 @@ import { promises as fs } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
+import { getConfig, setConfig, saveConfig } from './config';
+import type { AppConfigData } from './config';
+import { discoverClaudeMd } from './claude-md';
+
+let claudeMdContent = '';
 
 let agent: AgentRuntime | null = null;
 let currentAbortController: AbortController | null = null;
 let persistentSession: AgentRuntime | null = null;
 
-// In-memory config (updated by IPC)
-const appConfig = {
-  provider: 'deepseek',
-  model: 'deepseek-v4-pro',
-  models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
-  workspaceRoot: process.cwd(),
-  systemPrompt: 'You are a helpful coding assistant. Use tools when needed. Be concise and factual.',
-  maxTurns: 8,
-};
-
-// In-memory providers store
-const providers: Map<string, { id: string; name: string; type: string; baseUrl: string; apiKey: string; model: string; models: string[] }> = new Map();
-
 // Session storage: JSON files in .sessions/ directory
 function sessionsDir(): string {
-  return join(appConfig.workspaceRoot, '.sessions');
+  return join(getConfig().agent.workspaceRoot, '.sessions');
 }
 
 async function ensureSessionsDir(): Promise<void> {
@@ -70,11 +62,15 @@ export function setupIpcHandlers(
 
     // Reuse persistent session to keep context across turns
     if (!persistentSession) {
+      const cfg = getConfig();
+      const fullPrompt = claudeMdContent
+        ? `${cfg.systemPrompt}\n\n${claudeMdContent}`
+        : cfg.systemPrompt;
       persistentSession = new AgentRuntime(
         p,
         getTools(),
-        appConfig.maxTurns,
-        appConfig.systemPrompt,
+        cfg.agent.maxTurns,
+        fullPrompt,
       );
     }
     agent = persistentSession;
@@ -122,7 +118,7 @@ export function setupIpcHandlers(
 
   // ---- File system (direct) ----
   ipcMain.handle('fs:list-dir', async (_event, dirPath: string) => {
-    const p = ensurePath(appConfig.workspaceRoot, dirPath);
+    const p = ensurePath(getConfig().agent.workspaceRoot, dirPath);
     const entries = await fs.readdir(p, { withFileTypes: true });
     return entries
       .sort((a, b) => {
@@ -137,40 +133,67 @@ export function setupIpcHandlers(
   });
 
   ipcMain.handle('fs:read-file', async (_event, filePath: string) => {
-    const p = ensurePath(appConfig.workspaceRoot, filePath);
+    const p = ensurePath(getConfig().agent.workspaceRoot, filePath);
     return await fs.readFile(p, 'utf8');
   });
 
   ipcMain.handle('fs:write-file', async (_event, filePath: string, content: string) => {
-    const p = ensurePath(appConfig.workspaceRoot, filePath);
+    const p = ensurePath(getConfig().agent.workspaceRoot, filePath);
     await fs.mkdir(dirname(p), { recursive: true });
     await fs.writeFile(p, content, 'utf8');
   });
 
   // ---- Config ----
-  ipcMain.handle('config:get', () => ({
-    provider: appConfig.provider,
-    model: appConfig.model,
-    models: appConfig.models,
-    workspaceRoot: appConfig.workspaceRoot,
-    maxTurns: appConfig.maxTurns,
-  }));
+  ipcMain.handle('config:get', () => {
+    const cfg = getConfig();
+    return {
+      model: cfg.activeModel,
+      models: [...cfg.deepseek.models, ...cfg.anthropic.models],
+      workspaceRoot: cfg.agent.workspaceRoot,
+      maxTurns: cfg.agent.maxTurns,
+      baseUrl: cfg.deepseek.baseUrl,
+      hasApiKey: !!cfg.deepseek.apiKey,
+      hasAnthropicKey: !!cfg.anthropic.apiKey,
+    };
+  });
 
-  ipcMain.handle('config:set', (_event, key: string, value: unknown) => {
-    (appConfig as Record<string, unknown>)[key] = value;
-    // Reset session when model changes so new model takes effect
+  ipcMain.handle('config:set', async (_event, key: string, value: unknown) => {
+    const cfg = getConfig();
+    if (key === 'model') cfg.activeModel = value as string;
+    else if (key === 'maxTurns') cfg.agent.maxTurns = value as number;
+    else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
+    else if (key === 'deepseekApiKey') cfg.deepseek.apiKey = value as string;
+    else if (key === 'anthropicApiKey') cfg.anthropic.apiKey = value as string;
+    else if (key === 'baseUrl') cfg.deepseek.baseUrl = value as string;
+    await saveConfig();
     if (key === 'model') {
       persistentSession = null;
-      getWindow()?.webContents.send('agent:delta', ''); // trigger re-render
+      getWindow()?.webContents.send('agent:delta', '');
     }
   });
 
+  ipcMain.handle('config:get-full', () => getConfig());
+
   ipcMain.handle('config:get-providers', () => {
-    return Array.from(providers.values());
+    const cfg = getConfig();
+    return [
+      { id: 'deepseek', name: 'DeepSeek', type: 'openai-compatible', models: cfg.deepseek.models },
+      { id: 'anthropic', name: 'Anthropic', type: 'anthropic', models: cfg.anthropic.models },
+    ];
   });
 
-  ipcMain.handle('config:set-provider', (_event, id: string, config: unknown) => {
-    providers.set(id, config as { id: string; name: string; type: string; baseUrl: string; apiKey: string; model: string; models: string[] });
+  ipcMain.handle('config:set-provider', async (_event, id: string, pc: unknown) => {
+    const p = pc as { apiKey?: string; baseUrl?: string; models?: string[] };
+    const cfg = getConfig();
+    if (id === 'deepseek') {
+      if (p.apiKey !== undefined) cfg.deepseek.apiKey = p.apiKey;
+      if (p.baseUrl !== undefined) cfg.deepseek.baseUrl = p.baseUrl;
+      if (p.models !== undefined) cfg.deepseek.models = p.models;
+    } else if (id === 'anthropic') {
+      if (p.apiKey !== undefined) cfg.anthropic.apiKey = p.apiKey;
+      if (p.models !== undefined) cfg.anthropic.models = p.models;
+    }
+    await saveConfig();
   });
 
   // ---- Session persistence (file-based) ----
@@ -213,13 +236,24 @@ export function setupIpcHandlers(
       // File doesn't exist, ignore
     }
   });
+
+  // ---- CLAUDE.md ----
+  ipcMain.handle('claude-md:reload', async () => {
+    const result = await discoverClaudeMd(getConfig().agent.workspaceRoot);
+    claudeMdContent = result.content;
+    persistentSession = null;
+    return result.files;
+  });
+
+  ipcMain.handle('claude-md:get', () => {
+    return { content: claudeMdContent };
+  });
 }
 
-// Re-export for main/index.ts config access
-export function getConfig() {
-  return appConfig;
+export async function initClaudeMd(): Promise<void> {
+  const result = await discoverClaudeMd(getConfig().agent.workspaceRoot);
+  claudeMdContent = result.content;
 }
 
-export function setConfigModel(model: string) {
-  appConfig.model = model;
-}
+// Re-export for main/index.ts
+export { getConfig, setConfig, saveConfig } from './config';

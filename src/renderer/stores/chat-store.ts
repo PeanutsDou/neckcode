@@ -15,6 +15,7 @@ interface ChatState {
   isStreaming: boolean;
   streamingText: string;
   error: string | null;
+  pendingContext: string | null;
 
   addEntry: (entry: ChatEntry) => void;
   appendDelta: (text: string) => void;
@@ -22,15 +23,38 @@ interface ChatState {
   setStreaming: (v: boolean) => void;
   setError: (msg: string | null) => void;
   clear: () => void;
+  setPendingContext: (text: string | null) => void;
 }
 
 let nextId = 1;
+let currentSessionId: string | null = null;
+
+function autoSave() {
+  const state = useChatStore.getState();
+  if (state.entries.length === 0) return;
+  if (!currentSessionId) currentSessionId = Date.now().toString();
+
+  const title = state.entries.find(e => e.role === 'user')?.content.slice(0, 50) || 'Untitled';
+  window.electronAPI?.saveSession({
+    id: currentSessionId,
+    title,
+    projectPath: '',
+    modelId: '',
+    messages: state.entries,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }).then(() => {
+    // Notify session list to refresh
+    window.dispatchEvent(new CustomEvent('session-saved'));
+  }).catch(() => {});
+}
 
 export const useChatStore = create<ChatState>((set, get) => ({
   entries: [],
   isStreaming: false,
   streamingText: '',
   error: null,
+  pendingContext: null,
 
   addEntry(entry) {
     set(state => ({
@@ -59,6 +83,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingText: '',
       isStreaming: false,
     }));
+    // Auto-save after assistant response
+    autoSave();
   },
 
   setStreaming(v) {
@@ -70,6 +96,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   clear() {
-    set({ entries: [], streamingText: '', error: null, isStreaming: false });
+    currentSessionId = null;
+    set({ entries: [], streamingText: '', error: null, isStreaming: false, pendingContext: null });
+  },
+
+  setPendingContext(text) {
+    set({ pendingContext: text });
   },
 }));
+
+export function resetSessionId() {
+  currentSessionId = null;
+}

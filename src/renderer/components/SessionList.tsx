@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useChatStore } from '../stores/chat-store';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useChatStore, resetSessionId } from '../stores/chat-store';
 
 interface SessionItem {
   id: string;
@@ -11,9 +11,9 @@ interface SessionItem {
 export function SessionList() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const { clear, entries } = useChatStore();
+  const { clear } = useChatStore();
 
-  const loadSessions = async () => {
+  const loadSessions = useCallback(async () => {
     setLoading(true);
     try {
       const list = await window.electronAPI.listSessions();
@@ -22,15 +22,19 @@ export function SessionList() {
       // ignore
     }
     setLoading(false);
-  };
+  }, []);
 
+  // Load on mount + refresh on session-saved event
   useEffect(() => {
     loadSessions();
-  }, []);
+    const handler = () => loadSessions();
+    window.addEventListener('session-saved', handler);
+    return () => window.removeEventListener('session-saved', handler);
+  }, [loadSessions]);
 
   const handleNew = () => {
     clear();
-    (window as any).__currentSessionId = null;
+    resetSessionId();
   };
 
   const handleLoad = async (id: string) => {
@@ -40,6 +44,7 @@ export function SessionList() {
 
       const s = session as { messages: Array<{ role: string; content: string; toolName?: string; toolResult?: string; timestamp: number }> };
       clear();
+      resetSessionId();
       for (const msg of s.messages) {
         useChatStore.getState().addEntry({
           id: Date.now().toString() + Math.random(),
@@ -64,39 +69,18 @@ export function SessionList() {
     }
   };
 
-  const handleSave = async () => {
-    if (entries.length === 0) return;
-    const id = Date.now().toString();
-    const title = entries.find(e => e.role === 'user')?.content.slice(0, 50) || 'Untitled';
-    try {
-      await window.electronAPI.saveSession({
-        id,
-        title,
-        projectPath: '',
-        modelId: '',
-        messages: entries,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-      loadSessions();
-    } catch (err) {
-      console.error('Failed to save:', err);
-    }
-  };
-
   return (
     <div className="session-list">
       <div className="session-list-header">
         <span className="session-list-title">Sessions</span>
         <div className="session-list-actions">
           <button className="session-btn" onClick={handleNew} title="New session">+</button>
-          <button className="session-btn" onClick={handleSave} title="Save current" disabled={entries.length === 0}>&#x1F4BE;</button>
         </div>
       </div>
       <div className="session-list-items">
         {loading && <div className="session-list-loading">Loading...</div>}
         {sessions.length === 0 && !loading && (
-          <div className="session-list-empty">No saved sessions</div>
+          <div className="session-list-empty">Send a message to auto-save</div>
         )}
         {sessions.map(s => (
           <div key={s.id} className="session-item" onClick={() => handleLoad(s.id)}>

@@ -6,6 +6,8 @@ import { EditorPanel } from './components/EditorPanel';
 import { ModelSwitcher } from './components/ModelSwitcher';
 import { SessionList } from './components/SessionList';
 import { SettingsDialog } from './components/SettingsDialog';
+import { ContextBar } from './components/ContextBar';
+import { TerminalPanel } from './components/TerminalPanel';
 import { useAppStore } from './stores/app-store';
 
 class ErrorBoundary extends Component<
@@ -29,7 +31,7 @@ class ErrorBoundary extends Component<
 }
 
 export default function App() {
-  const { showSidebar, toggleSidebar, showSessions, toggleSessions } = useAppStore();
+  const { showSidebar, toggleSidebar, showSessions, toggleSessions, showTerminal, toggleTerminal } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
@@ -49,8 +51,12 @@ export default function App() {
           </div>
           <div className="toolbar-center">
             <ModelSwitcher />
+            <ContextBar />
           </div>
           <div className="toolbar-right">
+            <button className={`toolbar-btn ${showTerminal ? 'active' : ''}`} onClick={toggleTerminal} title="Terminal">
+              &#x1F4BB;
+            </button>
             <button className="toolbar-btn" onClick={() => setSettingsOpen(true)} title="Settings">
               &#x2699;
             </button>
@@ -90,6 +96,12 @@ export default function App() {
         </div>
 
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+        {showTerminal && (
+          <div className="terminal-area">
+            <TerminalPanel visible={showTerminal} />
+          </div>
+        )}
       </div>
     </ErrorBoundary>
   );

@@ -6,38 +6,44 @@ interface Props {
 }
 
 export function SettingsDialog({ open, onClose }: Props) {
-  const [activeTab, setActiveTab] = useState<'provider' | 'agent' | 'ui'>('provider');
-  const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com/v1');
-  const [apiKey, setApiKey] = useState('');
+  const [activeTab, setActiveTab] = useState<'deepseek' | 'anthropic' | 'agent'>('deepseek');
+
+  // DeepSeek
+  const [dsApiKey, setDsApiKey] = useState('');
+  const [dsBaseUrl, setDsBaseUrl] = useState('https://api.deepseek.com/v1');
+
+  // Anthropic
+  const [antApiKey, setAntApiKey] = useState('');
+
+  // Agent
   const [model, setModel] = useState('deepseek-v4-pro');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [maxTurns, setMaxTurns] = useState(8);
+
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setSaved(false); return; }
+
     window.electronAPI.getConfig().then(c => {
       setModel(c.model);
       setMaxTurns(c.maxTurns || 8);
+      setDsBaseUrl(c.baseUrl || 'https://api.deepseek.com/v1');
     }).catch(() => {});
   }, [open]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      await window.electronAPI.setConfig('deepseekApiKey', dsApiKey);
+      await window.electronAPI.setConfig('baseUrl', dsBaseUrl);
+      await window.electronAPI.setConfig('anthropicApiKey', antApiKey);
       await window.electronAPI.setConfig('model', model);
       await window.electronAPI.setConfig('maxTurns', maxTurns);
       await window.electronAPI.setConfig('systemPrompt', systemPrompt);
-      await window.electronAPI.setProvider('deepseek', {
-        id: 'deepseek',
-        name: 'DeepSeek',
-        type: 'openai-compatible',
-        baseUrl,
-        apiKey,
-        model,
-        models: [model],
-      });
-      onClose();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       console.error('Save failed:', err);
     }
@@ -51,36 +57,42 @@ export function SettingsDialog({ open, onClose }: Props) {
       <div className="settings-dialog" onClick={e => e.stopPropagation()}>
         <div className="settings-header">
           <h2>Settings</h2>
-          <button className="settings-close" onClick={onClose}>×</button>
+          <button className="settings-close" onClick={onClose}>&times;</button>
         </div>
 
         <div className="settings-tabs">
-          <button className={`settings-tab ${activeTab === 'provider' ? 'active' : ''}`}
-            onClick={() => setActiveTab('provider')}>Provider</button>
+          <button className={`settings-tab ${activeTab === 'deepseek' ? 'active' : ''}`}
+            onClick={() => setActiveTab('deepseek')}>DeepSeek</button>
+          <button className={`settings-tab ${activeTab === 'anthropic' ? 'active' : ''}`}
+            onClick={() => setActiveTab('anthropic')}>Anthropic</button>
           <button className={`settings-tab ${activeTab === 'agent' ? 'active' : ''}`}
             onClick={() => setActiveTab('agent')}>Agent</button>
-          <button className={`settings-tab ${activeTab === 'ui' ? 'active' : ''}`}
-            onClick={() => setActiveTab('ui')}>UI</button>
         </div>
 
         <div className="settings-body">
-          {activeTab === 'provider' && (
+          {activeTab === 'deepseek' && (
             <div className="settings-form">
               <label className="settings-label">
                 API Key
                 <input type="password" className="settings-input"
-                  value={apiKey} onChange={e => setApiKey(e.target.value)}
+                  value={dsApiKey} onChange={e => setDsApiKey(e.target.value)}
                   placeholder="sk-..." />
               </label>
               <label className="settings-label">
                 Base URL
                 <input type="text" className="settings-input"
-                  value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+                  value={dsBaseUrl} onChange={e => setDsBaseUrl(e.target.value)} />
               </label>
+            </div>
+          )}
+
+          {activeTab === 'anthropic' && (
+            <div className="settings-form">
               <label className="settings-label">
-                Model
-                <input type="text" className="settings-input"
-                  value={model} onChange={e => setModel(e.target.value)} />
+                API Key
+                <input type="password" className="settings-input"
+                  value={antApiKey} onChange={e => setAntApiKey(e.target.value)}
+                  placeholder="sk-ant-..." />
               </label>
             </div>
           )}
@@ -88,10 +100,15 @@ export function SettingsDialog({ open, onClose }: Props) {
           {activeTab === 'agent' && (
             <div className="settings-form">
               <label className="settings-label">
+                Default Model
+                <input type="text" className="settings-input"
+                  value={model} onChange={e => setModel(e.target.value)} />
+              </label>
+              <label className="settings-label">
                 System Prompt
                 <textarea className="settings-textarea"
                   value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)}
-                  rows={6} placeholder="You are a helpful coding assistant..." />
+                  rows={5} placeholder="You are a helpful coding assistant..." />
               </label>
               <label className="settings-label">
                 Max Turns
@@ -101,15 +118,10 @@ export function SettingsDialog({ open, onClose }: Props) {
               </label>
             </div>
           )}
-
-          {activeTab === 'ui' && (
-            <div className="settings-form">
-              <p className="settings-hint">Theme and appearance settings coming soon.</p>
-            </div>
-          )}
         </div>
 
         <div className="settings-footer">
+          {saved && <span className="settings-saved">Saved!</span>}
           <button className="btn btn-send" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
           </button>

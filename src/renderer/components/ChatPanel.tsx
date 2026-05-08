@@ -38,17 +38,6 @@ export function ChatPanel() {
     }));
     unsubs.push(api.onTurnDone((data: any) => {
       finishStream(data.text);
-      // Auto-save
-      const state = useChatStore.getState();
-      if (state.entries.length > 0) {
-        const sid = (window as any).__currentSessionId || Date.now().toString();
-        (window as any).__currentSessionId = sid;
-        const title = state.entries.find(e => e.role === 'user')?.content.slice(0, 50) || 'Untitled';
-        api.saveSession({
-          id: sid, title, projectPath: '', modelId: '',
-          messages: state.entries, createdAt: Date.now(), updatedAt: Date.now(),
-        }).catch(() => {});
-      }
     }));
     unsubs.push(api.onError((msg) => setError(msg)));
 

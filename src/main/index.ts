@@ -1,67 +1,74 @@
-import { app, BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, screen, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import { setupIpcHandlers } from './ipc-handlers';
 import { createOpenAIProvider } from './providers/openai-compatible';
 import { createAnthropicProvider } from './providers/anthropic';
 import { createToolRegistry } from './tools/registry';
+import { loadConfig, saveConfig, getConfig } from './config';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 
 let mainWindow: BrowserWindow | null = null;
-
-const config = {
-  deepseek: {
-    baseUrl: 'https://api.deepseek.com/v1',
-    apiKey: 'sk-fe2779230ca44d54ae075fc8d7eb9e36',
-    models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
-  },
-  anthropic: {
-    apiKey: '', // Set via settings UI
-    models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
-  },
-  agent: {
-    maxTurns: 8,
-    workspaceRoot: process.cwd(),
-  },
-  systemPrompt:
-    'You are a helpful coding assistant. Use tools when needed. Be concise and factual.',
-};
-
+let tray: Tray | null = null;
 let toolRegistry: ToolRegistry | null = null;
 
-function getOrCreateProvider(): Provider {
-  const { getConfig } = require('./ipc-handlers');
+function createProvider(): Provider {
   const cfg = getConfig();
+  const model = cfg.activeModel;
 
-  // Route to correct provider based on model prefix
-  const model = cfg.model;
   if (model.startsWith('claude-')) {
     return createAnthropicProvider({
-      apiKey: config.anthropic.apiKey || process.env.ANTHROPIC_API_KEY || '',
-      model: model,
+      apiKey: cfg.anthropic.apiKey || process.env.ANTHROPIC_API_KEY || '',
+      model,
     });
   }
 
   return createOpenAIProvider({
-    baseUrl: config.deepseek.baseUrl,
-    apiKey: config.deepseek.apiKey,
-    model: model,
+    baseUrl: cfg.deepseek.baseUrl,
+    apiKey: cfg.deepseek.apiKey,
+    model,
   });
 }
 
 function getOrCreateTools(): ToolRegistry {
   if (!toolRegistry) {
-    toolRegistry = createToolRegistry(config.agent.workspaceRoot);
+    const { dialog } = require('electron');
+    toolRegistry = createToolRegistry(
+      getConfig().agent.workspaceRoot,
+      async (message: string) => {
+        if (!mainWindow) return false;
+        const result = await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: 'Confirm',
+          message,
+          buttons: ['Cancel', 'Proceed'],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        return result.response === 1;
+      },
+    );
   }
   return toolRegistry;
 }
 
+function saveWindowBounds(): void {
+  if (!mainWindow) return;
+  const bounds = mainWindow.getBounds();
+  const cfg = getConfig();
+  cfg.window = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  saveConfig().catch(() => {});
+}
+
 function createWindow(): void {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
+  const saved = getConfig().window;
 
   mainWindow = new BrowserWindow({
-    width: Math.min(1400, Math.floor(width * 0.85)),
-    height: Math.min(900, Math.floor(height * 0.85)),
+    x: saved?.x,
+    y: saved?.y,
+    width: saved?.width || Math.min(1400, Math.floor(sw * 0.85)),
+    height: saved?.height || Math.min(900, Math.floor(sh * 0.85)),
     minWidth: 900,
     minHeight: 600,
     title: 'DeepSeek Code',
@@ -73,7 +80,6 @@ function createWindow(): void {
     },
   });
 
-  // In dev, load from Vite dev server; in prod, load built files
   const isDev = !app.isPackaged;
   if (isDev) {
     mainWindow.loadURL('http://localhost:5175');
@@ -82,21 +88,77 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
+  // Save window bounds on move/resize
+  mainWindow.on('resize', () => saveWindowBounds());
+  mainWindow.on('move', () => saveWindowBounds());
+
+  // Minimize to tray instead of closing
+  mainWindow.on('close', (event) => {
+    if (tray && !(app as any).__quitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
+    saveWindowBounds();
     mainWindow = null;
   });
 }
 
-app.whenReady().then(() => {
-  setupIpcHandlers(
-    getOrCreateProvider,
-    getOrCreateTools,
-  );
+function createTray(): void {
+  // Create a simple 16x16 colored icon (blue square)
+  const size = 16;
+  const buf = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    const off = i * 4;
+    buf[off] = 137;    // R
+    buf[off + 1] = 180; // G
+    buf[off + 2] = 250; // B
+    buf[off + 3] = 255; // A
+  }
+  const icon = nativeImage.createFromBuffer(buf, { width: size, height: size });
+  tray = new Tray(icon);
+  tray.setToolTip('DeepSeek Code');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Show',
+      click: () => {
+        mainWindow?.show();
+        mainWindow?.focus();
+      },
+    },
+    {
+      label: 'Quit',
+      click: () => {
+        (app as any).__quitting = true;
+        saveWindowBounds();
+        app.quit();
+      },
+    },
+  ]);
+
+  tray.setContextMenu(contextMenu);
+  tray.on('double-click', () => {
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
+}
+
+app.whenReady().then(async () => {
+  await loadConfig();
+  setupIpcHandlers(createProvider, getOrCreateTools);
+  const { initClaudeMd } = require('./ipc-handlers');
+  await initClaudeMd();
   createWindow();
+  createTray();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+    } else {
+      mainWindow?.show();
     }
   });
 });
@@ -105,4 +167,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  (app as any).__quitting = true;
 });

@@ -2,6 +2,7 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatEntry } from '../stores/chat-store';
+import { DiffPreview } from './DiffPreview';
 
 interface Props {
   entry: ChatEntry;
@@ -9,6 +10,15 @@ interface Props {
 
 export function MessageBubble({ entry }: Props) {
   if (entry.role === 'tool') {
+    // Check if this is an edit_file diff result
+    let diffData: { status: string; file: string; line: number; old: string; new: string } | null = null;
+    if (entry.toolName === 'edit_file' && entry.toolResult) {
+      try {
+        const parsed = JSON.parse(entry.toolResult);
+        if (parsed.status === 'modified') diffData = parsed;
+      } catch { /* not JSON */ }
+    }
+
     return (
       <div className="message message-tool">
         <div className="tool-header">
@@ -18,9 +28,11 @@ export function MessageBubble({ entry }: Props) {
             <span className="tool-args">{entry.toolArgs.slice(0, 100)}</span>
           )}
         </div>
-        {entry.toolResult && (
+        {diffData ? (
+          <DiffPreview data={diffData} />
+        ) : entry.toolResult ? (
           <pre className="tool-result">{entry.toolResult.slice(0, 500)}</pre>
-        )}
+        ) : null}
       </div>
     );
   }

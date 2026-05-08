@@ -1,6 +1,7 @@
 import React, { useCallback, useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useEditorStore } from '../stores/editor-store';
+import { useChatStore } from '../stores/chat-store';
 
 export function EditorPanel() {
   const { tabs, activeTab, updateContent, saveFile, setSelectedText } = useEditorStore();
@@ -29,6 +30,20 @@ export function EditorPanel() {
       if (selection) {
         setSelectedText(selection);
       }
+    });
+
+    // Context menu: Send selection to chat
+    editor.addAction({
+      id: 'send-to-chat',
+      label: 'Send Selection to Chat',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1,
+      run(ed) {
+        const sel = ed.getModel()?.getValueInRange(ed.getSelection() || undefined);
+        if (sel) {
+          useChatStore.getState().setPendingContext(sel);
+        }
+      },
     });
   }, []);
 

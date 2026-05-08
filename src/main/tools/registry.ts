@@ -147,7 +147,20 @@ const DEFINITIONS: ToolDefinition[] = [
   },
 ];
 
-export function createToolRegistry(workspaceRoot: string): ToolRegistry {
+export function createToolRegistry(
+  workspaceRoot: string,
+  confirmHandler?: (message: string) => Promise<boolean>,
+): ToolRegistry {
+  const needsConfirm = (toolName: string, args: Record<string, unknown>): boolean => {
+    if (toolName === 'delete_file') return true;
+    if (toolName === 'run_shell') {
+      const cmd = String(args.command || '').toLowerCase();
+      // Danger patterns
+      return /rm\s+-rf|del\s+\/f|format\s|mkfs|dd\s+if|git\s+push\s+--force|git\s+reset\s+--hard|shutdown|restart/i.test(cmd);
+    }
+    return false;
+  };
+
   const handlers: Record<string, (args: Record<string, unknown>) => Promise<string>> = {
     async read_file(args) {
       const p = ensurePath(workspaceRoot, args.path as string);
@@ -241,7 +254,15 @@ export function createToolRegistry(workspaceRoot: string): ToolRegistry {
         }
       }
 
-      return `Replaced in ${p} (line ${changedLine})`;
+      // Return diff info for UI rendering
+      const relPath = p.replace(/\\/g, '/');
+      return JSON.stringify({
+        status: 'modified',
+        file: relPath,
+        line: changedLine,
+        old: oldStr.slice(0, 2000),
+        new: newStr.slice(0, 2000),
+      });
     },
 
     async glob(args) {
@@ -425,6 +446,18 @@ export function createToolRegistry(workspaceRoot: string): ToolRegistry {
       }
       try {
         const args = safeJson(toolCall.argumentsText);
+
+        // Check for dangerous operations
+        if (confirmHandler && needsConfirm(toolCall.name, args)) {
+          const desc = toolCall.name === 'delete_file'
+            ? `Delete file: ${args.path}`
+            : `Run shell command: ${String(args.command).slice(0, 200)}`;
+          const approved = await confirmHandler(`Dangerous operation:\n\n${desc}\n\nProceed?`);
+          if (!approved) {
+            return `Operation cancelled by user: ${desc}`;
+          }
+        }
+
         return await handler(args);
       } catch (err) {
         return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
