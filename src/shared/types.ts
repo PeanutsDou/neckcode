@@ -60,4 +60,5 @@ export interface ToolDefinition {
     description: string;
     parameters: Record<string, unknown>;
   };
+  readOnly?: boolean;
 }

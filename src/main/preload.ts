@@ -4,35 +4,36 @@ console.log('[preload] loading...');
 
 const api = {
   // Agent
-  sendMessage: (text: string, attachments?: { type: string; data: string; mimeType: string }[]) => {
-    return ipcRenderer.invoke('agent:send-message', text, attachments || []);
+  sendMessage: (sessionId: string, text: string, attachments?: { type: string; data: string; mimeType: string }[]) => {
+    return ipcRenderer.invoke('agent:send-message', sessionId, text, attachments || []);
   },
-  abort: () => ipcRenderer.invoke('agent:abort'),
-  compare: (text: string, models: string[]) => ipcRenderer.invoke('agent:compare', text, models),
+  abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
+  resetAgent: (sessionId: string) => ipcRenderer.invoke('agent:reset', sessionId),
+  setAgentContext: (sessionId: string, messages: unknown[]) => ipcRenderer.invoke('agent:set-context', sessionId, messages),
 
-  // Agent events
-  onDelta: (cb: (text: string) => void) => {
-    const listener = (_event: unknown, text: string) => cb(text);
+  // Agent events — now include sessionId as first argument
+  onDelta: (cb: (sid: string, text: string) => void) => {
+    const listener = (_event: unknown, sid: string, text: string) => cb(sid, text);
     ipcRenderer.on('agent:delta', listener);
     return () => { ipcRenderer.removeListener('agent:delta', listener); };
   },
-  onToolStart: (cb: (data: unknown) => void) => {
-    const listener = (_event: unknown, data: unknown) => cb(data);
+  onToolStart: (cb: (sid: string, data: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
     ipcRenderer.on('agent:tool-start', listener);
     return () => { ipcRenderer.removeListener('agent:tool-start', listener); };
   },
-  onToolResult: (cb: (data: unknown) => void) => {
-    const listener = (_event: unknown, data: unknown) => cb(data);
+  onToolResult: (cb: (sid: string, data: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
     ipcRenderer.on('agent:tool-result', listener);
     return () => { ipcRenderer.removeListener('agent:tool-result', listener); };
   },
-  onTurnDone: (cb: (data: unknown) => void) => {
-    const listener = (_event: unknown, data: unknown) => cb(data);
+  onTurnDone: (cb: (sid: string, data: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
     ipcRenderer.on('agent:turn-done', listener);
     return () => { ipcRenderer.removeListener('agent:turn-done', listener); };
   },
-  onError: (cb: (msg: string) => void) => {
-    const listener = (_event: unknown, msg: string) => cb(msg);
+  onError: (cb: (sid: string, msg: string) => void) => {
+    const listener = (_event: unknown, sid: string, msg: string) => cb(sid, msg);
     ipcRenderer.on('agent:error', listener);
     return () => { ipcRenderer.removeListener('agent:error', listener); };
   },
@@ -41,7 +42,8 @@ const api = {
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (key: string, value: unknown) => ipcRenderer.invoke('config:set', key, value),
   getProviders: () => ipcRenderer.invoke('config:get-providers'),
-  setProvider: (id: string, config: unknown) => ipcRenderer.invoke('config:set-provider', id, config),
+  setProvider: (pc: unknown) => ipcRenderer.invoke('config:set-provider', pc),
+  deleteProvider: (id: string) => ipcRenderer.invoke('config:delete-provider', id),
 
   // File system (direct, not through agent)
   listDir: (dirPath: string) => ipcRenderer.invoke('fs:list-dir', dirPath),
@@ -68,6 +70,31 @@ const api = {
   loadSession: (id: string) => ipcRenderer.invoke('session:load', id),
   listSessions: () => ipcRenderer.invoke('session:list'),
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id),
+  renameSession: (id: string, title: string) => ipcRenderer.invoke('session:rename', id, title),
+  generateTitle: (message: string) => ipcRenderer.invoke('session:generate-title', message),
+
+  // Skills
+  listSkills: () => ipcRenderer.invoke('skills:list'),
+  invokeSkill: (name: string) => ipcRenderer.invoke('skills:invoke', name),
+  writeSkillContent: (name: string, content: string) => ipcRenderer.invoke('skills:write-content', name, content),
+  getAgentMd: () => ipcRenderer.invoke('agent-md:get'),
+  listMemory: () => ipcRenderer.invoke('memory:list'),
+  readMemory: (path: string) => ipcRenderer.invoke('memory:read', path),
+  writeMemory: (path: string, content: string) => ipcRenderer.invoke('memory:write', path, content),
+
+  // Ask user question
+  onAskShow: (cb: (askId: string, questions: unknown[]) => void) => {
+    const listener = (_: unknown, askId: string, questions: unknown[]) => cb(askId, questions);
+    ipcRenderer.on('ask:show', listener);
+    return () => { ipcRenderer.removeListener('ask:show', listener); };
+  },
+  respondToAsk: (askId: string, answers: Record<string, string> | null) => {
+    return ipcRenderer.invoke('ask:respond', askId, answers);
+  },
+
+  // Permissions
+  getPermissionMode: () => ipcRenderer.invoke('permission:get'),
+  setPermissionMode: (mode: string) => ipcRenderer.invoke('permission:set', mode),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

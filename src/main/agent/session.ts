@@ -53,6 +53,15 @@ export class ChatSession {
     }
   }
 
+  setMessages(messages: Message[]): void {
+    this.messages = messages;
+    this.checkpoints = [];
+  }
+
+  getMessages(): Message[] {
+    return JSON.parse(JSON.stringify(this.messages)) as Message[];
+  }
+
   clear(): void {
     this.messages = [];
     this.checkpoints = [];
@@ -74,15 +83,27 @@ export class ChatSession {
     return Math.round(chars / 4);
   }
 
-  /** Compact: replace early user+assistant pairs with a system summary prompt */
-  compact(keepRecentPairs: number): void {
-    if (this.messages.length <= keepRecentPairs * 2 + 2) return;
+  /** Compact: replace early messages with a system summary, keeping recent turn groups intact */
+  compact(keepRecentTurns: number): void {
+    // Count turns from the end: a turn = user + assistant + any following tool messages
+    let turnCount = 0;
+    let cutoff = this.messages.length;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role === 'user') {
+        turnCount++;
+        if (turnCount > keepRecentTurns) {
+          cutoff = i;
+          break;
+        }
+      }
+    }
 
-    // Extract early messages to summarize
-    const earlyMessages = this.messages.slice(0, -(keepRecentPairs * 2));
-    const recentMessages = this.messages.slice(-(keepRecentPairs * 2));
+    if (cutoff <= 0) return;
 
-    // Build a summary of early conversation
+    const earlyMessages = this.messages.slice(0, cutoff);
+    const recentMessages = this.messages.slice(cutoff);
+
     const summaryParts: string[] = [];
     for (const m of earlyMessages) {
       if (m.role === 'user') {
@@ -95,12 +116,9 @@ export class ChatSession {
     }
 
     const summary = `[Prior conversation summary - ${earlyMessages.length} messages compressed]\n${summaryParts.join('\n')}`;
-
-    // Replace with summary + recent messages
     this.messages = [
       { role: 'system', content: summary },
       ...recentMessages,
     ];
   }
 }
-

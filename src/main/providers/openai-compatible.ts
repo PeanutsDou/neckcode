@@ -9,6 +9,7 @@ export interface OpenAIConfig {
   stream?: boolean;
   temperature?: number;
   maxTokens?: number;
+  // Default max_tokens is 16384 — avoids truncation on long replies
 }
 
 function toApiMessages(messages: Message[]): unknown[] {
@@ -96,7 +97,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           tool_choice: tools.length > 0 ? 'auto' : undefined,
           stream: config.stream !== false,
           temperature: config.temperature ?? 0,
-          max_tokens: config.maxTokens ?? 4096,
+          max_tokens: config.maxTokens ?? 16384,
         }),
         signal,
       });

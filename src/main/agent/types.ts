@@ -26,6 +26,7 @@ export interface ToolDefinition {
     description: string;
     parameters: Record<string, unknown>;
   };
+  readOnly?: boolean;
 }
 
 export interface RunStepResult {

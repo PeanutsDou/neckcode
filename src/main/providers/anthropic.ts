@@ -96,7 +96,7 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
 
       const stream = client.messages.stream({
         model: actualModel,
-        max_tokens: config.maxTokens || 4096,
+        max_tokens: config.maxTokens || 16384,
         system: systemPrompt || undefined,
         messages: apiMessages,
         tools: apiTools,

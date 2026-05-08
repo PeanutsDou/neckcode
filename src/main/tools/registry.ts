@@ -4,6 +4,11 @@ import { exec as execCb, execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import type { ToolDefinition, ToolCall } from '../agent/types';
 import type { ToolRegistry } from '../agent/runtime';
+import { webFetch } from './web-fetch';
+import { webSearch } from './web-search';
+import { taskHandlers } from './task-tools';
+import { notebookEdit } from './notebook-edit';
+import { skillHandlers } from './skill-tools';
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -18,7 +23,7 @@ function ensurePath(workspaceRoot: string, inputPath?: string): string {
   return resolved;
 }
 
-function truncate(text: string, maxLen = 12000): string {
+function truncate(text: string, maxLen = 200000): string {
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen)}\n...[truncated ${text.length - maxLen} chars]`;
 }
@@ -42,6 +47,7 @@ const DEFINITIONS: ToolDefinition[] = [
         required: ['path'],
       },
     },
+    readOnly: true,
   },
   {
     type: 'function',
@@ -57,6 +63,7 @@ const DEFINITIONS: ToolDefinition[] = [
         required: ['path', 'content'],
       },
     },
+    readOnly: false,
   },
   {
     type: 'function',
@@ -70,6 +77,7 @@ const DEFINITIONS: ToolDefinition[] = [
         },
       },
     },
+    readOnly: true,
   },
   {
     type: 'function',
@@ -84,6 +92,7 @@ const DEFINITIONS: ToolDefinition[] = [
         required: ['path'],
       },
     },
+    readOnly: false,
   },
   {
     type: 'function',
@@ -98,6 +107,7 @@ const DEFINITIONS: ToolDefinition[] = [
         required: ['command'],
       },
     },
+    readOnly: false,
   },
   {
     type: 'function',
@@ -114,6 +124,7 @@ const DEFINITIONS: ToolDefinition[] = [
         required: ['path', 'old_string', 'new_string'],
       },
     },
+    readOnly: false,
   },
   {
     type: 'function',
@@ -128,6 +139,7 @@ const DEFINITIONS: ToolDefinition[] = [
         required: ['pattern'],
       },
     },
+    readOnly: true,
   },
   {
     type: 'function',
@@ -144,19 +156,186 @@ const DEFINITIONS: ToolDefinition[] = [
         required: ['pattern'],
       },
     },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch content from a URL and extract text. Only http/https URLs are allowed. Internal/private network addresses are blocked. Results are cached for 15 minutes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to fetch. Must be http or https.' },
+        },
+        required: ['url'],
+      },
+    },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web using DuckDuckGo. Returns titles, URLs, and snippets for up to 10 results.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The search query.' },
+        },
+        required: ['query'],
+      },
+    },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task_create',
+      description: 'Create a new task. Returns the task with a unique ID. Use this to break complex work into trackable steps.',
+      parameters: {
+        type: 'object',
+        properties: {
+          subject: { type: 'string', description: 'Brief title for the task.' },
+          description: { type: 'string', description: 'What needs to be done.' },
+          activeForm: { type: 'string', description: 'Present continuous tense form, e.g. "Running tests". Shown in UI while in progress.' },
+        },
+        required: ['subject', 'description'],
+      },
+    },
+    readOnly: false,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task_get',
+      description: 'Retrieve a task by its ID. Returns full task details including dependencies.',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', description: 'The task ID to retrieve.' },
+        },
+        required: ['taskId'],
+      },
+    },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task_list',
+      description: 'List all tasks. Returns id, status, subject, and blockedBy for each task.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task_update',
+      description: 'Update a task. Can change status (pending/in_progress/completed), subject, description, and set up dependencies with addBlocks and addBlockedBy. A task cannot be started while blocked by incomplete tasks.',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', description: 'The task ID to update.' },
+          status: { type: 'string', description: 'New status: pending, in_progress, or completed.' },
+          subject: { type: 'string', description: 'New title.' },
+          description: { type: 'string', description: 'New description.' },
+          addBlocks: { type: 'array', items: { type: 'string' }, description: 'Task IDs that this task blocks.' },
+          addBlockedBy: { type: 'array', items: { type: 'string' }, description: 'Task IDs that block this task.' },
+        },
+        required: ['taskId'],
+      },
+    },
+    readOnly: false,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'notebook_edit',
+      description: 'Edit a Jupyter notebook (.ipynb) at the cell level. Supports replace (default), insert, and delete modes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          notebook_path: { type: 'string', description: 'Relative path to the .ipynb file.' },
+          new_source: { type: 'string', description: 'New source content for the cell.' },
+          cell_id: { type: 'string', description: 'Target cell ID. Defaults to the first cell.' },
+          cell_type: { type: 'string', description: 'Cell type: "code" or "markdown".' },
+          edit_mode: { type: 'string', description: 'Edit mode: "replace" (default), "insert", or "delete".' },
+        },
+        required: ['notebook_path', 'new_source'],
+      },
+    },
+    readOnly: false,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_skills',
+      description: 'List all available skills loaded from skills directories. Use this before invoke_skill if unsure which skill applies.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'invoke_skill',
+      description: 'Load a SKILL.md skill into the conversation. Call this when a loaded skill is relevant to the task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill: { type: 'string', description: 'Skill name, with or without a leading slash.' },
+          args: { type: 'string', description: 'Optional arguments to pass into the skill.' },
+        },
+        required: ['skill'],
+      },
+    },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ask_user_question',
+      description: 'Ask the user one or more questions when you need clarification or decisions. Each question can have multiple options.',
+      parameters: {
+        type: 'object',
+        properties: {
+          questions: { type: 'array', items: { type: 'object' }, description: 'Array of questions to ask the user.' },
+        },
+        required: ['questions'],
+      },
+    },
+    readOnly: true,
   },
 ];
+
+import type { PermissionMode } from '../../shared/permissions';
+
+const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell']);
+const DANGER_PATTERNS = /rm\s+-rf|del\s+\/f|format\s|mkfs|dd\s+if|git\s+push\s+--force|git\s+reset\s+--hard|shutdown|restart/i;
 
 export function createToolRegistry(
   workspaceRoot: string,
   confirmHandler?: (message: string) => Promise<boolean>,
+  askHandler?: (questions: Array<{ question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }>) => Promise<Record<string, string>>,
+  getPermissionMode?: () => PermissionMode,
 ): ToolRegistry {
   const needsConfirm = (toolName: string, args: Record<string, unknown>): boolean => {
+    const mode = getPermissionMode?.() || 'default';
+    if (mode === 'bypass') return false;
+    if (mode === 'plan') return true; // All writes are blocked
     if (toolName === 'delete_file') return true;
+    if (mode === 'acceptEdits' && (toolName === 'write_file' || toolName === 'edit_file')) return false;
     if (toolName === 'run_shell') {
       const cmd = String(args.command || '').toLowerCase();
-      // Danger patterns
-      return /rm\s+-rf|del\s+\/f|format\s|mkfs|dd\s+if|git\s+push\s+--force|git\s+reset\s+--hard|shutdown|restart/i.test(cmd);
+      return DANGER_PATTERNS.test(cmd);
     }
     return false;
   };
@@ -430,7 +609,71 @@ export function createToolRegistry(
 
       const output = results.join('\n');
       const summary = `Found ${results.length} match(es) for "${pattern}"`;
-      return `${summary}\n${truncate(output, 8000)}`;
+      return `${summary}\n${truncate(output, 80000)}`;
+    },
+
+    async web_fetch(args) {
+      const url = String(args.url || '');
+      return await webFetch(url);
+    },
+
+    async web_search(args) {
+      const query = String(args.query || '');
+      return await webSearch(query);
+    },
+
+    async task_create(args) {
+      return taskHandlers.task_create(args);
+    },
+
+    async task_get(args) {
+      return taskHandlers.task_get(args);
+    },
+
+    async task_list(args) {
+      return taskHandlers.task_list(args);
+    },
+
+    async task_update(args) {
+      return taskHandlers.task_update(args);
+    },
+
+    async notebook_edit(args) {
+      return await notebookEdit(workspaceRoot, args);
+    },
+
+    async list_skills(args) {
+      return skillHandlers.list_skills(args);
+    },
+
+    async invoke_skill(args) {
+      return skillHandlers.invoke_skill(args);
+    },
+
+    async ask_user_question(args) {
+      if (!askHandler) return 'ERROR: UI not available for questions.';
+
+      const rawQuestions = args.questions;
+      if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+        return 'ERROR: "questions" must be a non-empty array of question objects.';
+      }
+
+      const questions = rawQuestions.map((q: any) => ({
+        question: String(q.question || ''),
+        header: String(q.header || ''),
+        options: Array.isArray(q.options) ? q.options.map((o: any) => ({
+          label: String(o.label || ''),
+          description: String(o.description || ''),
+        })) : [],
+        multiSelect: Boolean(q.multiSelect),
+      }));
+
+      try {
+        const answers = await askHandler(questions);
+        return JSON.stringify(answers, null, 2);
+      } catch (err) {
+        return `User question cancelled: ${err instanceof Error ? err.message : String(err)}`;
+      }
     },
   };
 
@@ -446,6 +689,12 @@ export function createToolRegistry(
       }
       try {
         const args = safeJson(toolCall.argumentsText);
+        const mode = getPermissionMode?.() || 'default';
+
+        // Plan mode: block all write tools
+        if (mode === 'plan' && WRITE_TOOLS.has(toolCall.name)) {
+          return `[Plan mode] Blocked tool "${toolCall.name}". Only read operations are allowed in plan mode.`;
+        }
 
         // Check for dangerous operations
         if (confirmHandler && needsConfirm(toolCall.name, args)) {

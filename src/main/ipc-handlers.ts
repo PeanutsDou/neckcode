@@ -4,33 +4,44 @@ import { dirname, resolve, join } from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
-import { getConfig, setConfig, saveConfig } from './config';
-import type { AppConfigData } from './config';
-import { discoverClaudeMd } from './claude-md';
+import type { Message } from './agent/types';
+import { getConfig, setConfig, saveConfig, getActiveProvider } from './config';
+import type { AppConfigData, ProviderConfig } from './config';
+import type { PermissionMode } from '../shared/permissions';
+import { discoverAgentMd } from './agent-md';
+import { getLoadedSkills, loadSkills } from './skills/loader';
+interface SessionData {
+  id: string;
+  title?: string;
+  projectPath?: string;
+  modelId?: string;
+  messages?: unknown[];
+  createdAt?: number;
+  updatedAt?: number;
+}
 
-let claudeMdContent = '';
+let agentMdContent = '';
+let agentMdFiles: string[] = [];
 
-let agent: AgentRuntime | null = null;
-let currentAbortController: AbortController | null = null;
-let persistentSession: AgentRuntime | null = null;
+// Pending ask-user-question promises, keyed by a unique ID
+export const pendingAsks = new Map<string, { resolve: (answers: Record<string, string>) => void; reject: (err: Error) => void }>();
+let askIdCounter = 0;
 
-// Session storage: JSON files in .sessions/ directory
+const sessionAgents = new Map<string, AgentRuntime>();
+const sessionAbortControllers = new Map<string, AbortController>();
+
+let currentPermissionMode: PermissionMode = 'default';
+
+export function getPermissionMode(): PermissionMode {
+  return currentPermissionMode;
+}
+
 function sessionsDir(): string {
   return join(getConfig().agent.workspaceRoot, '.sessions');
 }
 
 async function ensureSessionsDir(): Promise<void> {
   await fs.mkdir(sessionsDir(), { recursive: true });
-}
-
-interface SessionData {
-  id: string;
-  title: string;
-  projectPath: string;
-  modelId: string;
-  messages: unknown[];
-  createdAt: number;
-  updatedAt: number;
 }
 
 function getWindow() {
@@ -51,93 +62,124 @@ export function setupIpcHandlers(
   getProvider: () => Provider,
   getTools: () => ToolRegistry,
 ) {
+  function createSessionAgent(messages?: Message[]): AgentRuntime {
+    const cfg = getConfig();
+    const fullPrompt = agentMdContent
+      ? `${cfg.systemPrompt}\n\n${agentMdContent}`
+      : cfg.systemPrompt;
+    const agent = new AgentRuntime(getProvider(), getTools(), cfg.agent.maxTurns, fullPrompt);
+    if (messages?.length) agent.loadMessages(messages);
+    return agent;
+  }
+
   // ---- Agent ----
-  ipcMain.handle('agent:send-message', async (_event, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
+  ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
     const p = getProvider();
     if (!p) throw new Error('No provider configured');
 
-    if (currentAbortController) {
-      currentAbortController.abort();
-    }
-    currentAbortController = new AbortController();
+    // Abort previous run for THIS session only
+    const prevAbort = sessionAbortControllers.get(sessionId);
+    if (prevAbort) prevAbort.abort();
+    const abortCtrl = new AbortController();
+    sessionAbortControllers.set(sessionId, abortCtrl);
 
-    // Reuse persistent session to keep context across turns
-    if (!persistentSession) {
+    // Per-session agent
+    let sessionAgent = sessionAgents.get(sessionId);
+    if (!sessionAgent) {
       const cfg = getConfig();
-      const fullPrompt = claudeMdContent
-        ? `${cfg.systemPrompt}\n\n${claudeMdContent}`
+      const fullPrompt = agentMdContent
+        ? `${cfg.systemPrompt}\n\n${agentMdContent}`
         : cfg.systemPrompt;
-      persistentSession = new AgentRuntime(
-        p,
-        getTools(),
-        cfg.agent.maxTurns,
-        fullPrompt,
-      );
+      sessionAgent = new AgentRuntime(p, getTools(), cfg.agent.maxTurns, fullPrompt);
+      sessionAgents.set(sessionId, sessionAgent);
     }
-    agent = persistentSession;
+
+    // Buffer delta text to reduce IPC overhead — flush every 30ms
+    let deltaBuffer = '';
+    let flushTimer: ReturnType<typeof setInterval> | null = null;
+    const flushDelta = () => {
+      if (deltaBuffer) {
+        getWindow()?.webContents.send('agent:delta', sessionId, deltaBuffer);
+        deltaBuffer = '';
+      }
+    };
 
     try {
-      const result = await persistentSession.runUserTurn(
+      const result = await sessionAgent.runUserTurn(
         message,
         (attachments || []) as { type: 'image'; data: string; mimeType: string }[],
         {
           onDelta(text) {
-            getWindow()?.webContents.send('agent:delta', text);
+            if (!flushTimer) {
+              flushTimer = setInterval(flushDelta, 30);
+            }
+            deltaBuffer += text;
           },
           onToolStart(toolCall) {
-            getWindow()?.webContents.send('agent:tool-start', toolCall);
+            getWindow()?.webContents.send('agent:tool-start', sessionId, toolCall);
           },
           onToolResult(toolCall, result) {
-            getWindow()?.webContents.send('agent:tool-result', {
+            getWindow()?.webContents.send('agent:tool-result', sessionId, {
               name: toolCall.name,
               argumentsText: toolCall.argumentsText,
               result,
             });
           },
           onComplete(step) {
-            getWindow()?.webContents.send('agent:turn-done', step);
+            flushDelta();
+            getWindow()?.webContents.send('agent:turn-done', sessionId, step);
           },
           onError(error) {
-            getWindow()?.webContents.send('agent:error', error.message);
+            getWindow()?.webContents.send('agent:error', sessionId, error.message);
           },
         },
-        currentAbortController.signal,
+        abortCtrl.signal,
       );
+      if (flushTimer) { clearInterval(flushTimer); flushDelta(); }
       return result;
     } catch (err) {
+      if (flushTimer) { clearInterval(flushTimer); flushDelta(); }
       const msg = err instanceof Error ? err.message : String(err);
       if (msg !== 'Aborted') {
-        getWindow()?.webContents.send('agent:error', msg);
+        getWindow()?.webContents.send('agent:error', sessionId, msg);
       }
       return null;
     }
   });
 
-  ipcMain.handle('agent:compare', async (_event, message: string, models: string[]) => {
-    const { createAnthropicProvider } = require('./providers/anthropic');
-    const { createOpenAIProvider } = require('./providers/openai-compatible');
-    const results: { model: string; text: string; error?: string }[] = [];
-
-    for (const model of models) {
-      try {
-        const cfg = getConfig();
-        const p: Provider = model.startsWith('claude-')
-          ? createAnthropicProvider({ apiKey: cfg.anthropic.apiKey || process.env.ANTHROPIC_API_KEY || '', model })
-          : createOpenAIProvider({ baseUrl: cfg.deepseek.baseUrl, apiKey: cfg.deepseek.apiKey, model });
-
-        const tempSession = new AgentRuntime(p, getTools(), 1, cfg.systemPrompt);
-        const result = await tempSession.runUserTurn(message, [], { onComplete() {}, onError() {} });
-        results.push({ model, text: result.text });
-      } catch (err) {
-        results.push({ model, text: '', error: err instanceof Error ? err.message : String(err) });
-      }
-    }
-    return results;
+  ipcMain.handle('agent:abort', (_event, sessionId: string) => {
+    sessionAbortControllers.get(sessionId)?.abort();
+    sessionAbortControllers.delete(sessionId);
   });
 
-  ipcMain.handle('agent:abort', () => {
-    currentAbortController?.abort();
-    currentAbortController = null;
+  ipcMain.handle('agent:reset', (_event, sessionId: string) => {
+    sessionAgents.delete(sessionId);
+    sessionAbortControllers.delete(sessionId);
+  });
+
+  ipcMain.handle('agent:set-context', async (_event, sessionId: string, messages: Array<{ role: string; content: string }>) => {
+    const p = getProvider();
+    if (!p) throw new Error('No provider configured');
+    const cfg = getConfig();
+    const fullPrompt = agentMdContent
+      ? `${cfg.systemPrompt}\n\n${agentMdContent}`
+      : cfg.systemPrompt;
+    const agent = new AgentRuntime(p, getTools(), cfg.agent.maxTurns, fullPrompt);
+    agent.loadMessages(messages as any);
+    sessionAgents.set(sessionId, agent);
+  });
+
+  // Ask-user-question round-trip
+  ipcMain.handle('ask:respond', (_event, askId: string, answers: Record<string, string> | null) => {
+    const pending = pendingAsks.get(askId);
+    if (pending) {
+      pendingAsks.delete(askId);
+      if (answers) {
+        pending.resolve(answers);
+      } else {
+        pending.reject(new Error('User cancelled'));
+      }
+    }
   });
 
   // ---- File system (direct) ----
@@ -170,52 +212,97 @@ export function setupIpcHandlers(
   // ---- Config ----
   ipcMain.handle('config:get', () => {
     const cfg = getConfig();
+    const active = getActiveProvider();
+    const allModels = cfg.providers.flatMap(p => p.models);
     return {
       model: cfg.activeModel,
-      models: [...cfg.deepseek.models, ...cfg.anthropic.models],
+      models: allModels,
+      providers: cfg.providers.map(p => ({ id: p.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, models: p.models })),
+      activeProvider: cfg.activeProvider,
       workspaceRoot: cfg.agent.workspaceRoot,
       maxTurns: cfg.agent.maxTurns,
-      baseUrl: cfg.deepseek.baseUrl,
-      hasApiKey: !!cfg.deepseek.apiKey,
-      hasAnthropicKey: !!cfg.anthropic.apiKey,
+      maxTokens: cfg.agent.maxTokens,
+      contextLimit: cfg.agent.contextLimit,
+      baseUrl: active.baseUrl,
+      deepseekApiKey: cfg.providers.find(p => p.id === 'deepseek')?.apiKey || '',
+      anthropicApiKey: cfg.providers.find(p => p.id === 'anthropic')?.apiKey || '',
     };
   });
 
   ipcMain.handle('config:set', async (_event, key: string, value: unknown) => {
     const cfg = getConfig();
-    if (key === 'model') cfg.activeModel = value as string;
-    else if (key === 'maxTurns') cfg.agent.maxTurns = value as number;
-    else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
-    else if (key === 'deepseekApiKey') cfg.deepseek.apiKey = value as string;
-    else if (key === 'anthropicApiKey') cfg.anthropic.apiKey = value as string;
-    else if (key === 'baseUrl') cfg.deepseek.baseUrl = value as string;
-    await saveConfig();
     if (key === 'model') {
-      persistentSession = null;
-      getWindow()?.webContents.send('agent:delta', '');
+      cfg.activeModel = value as string;
+      // Auto-set activeProvider based on which provider has this model
+      for (const p of cfg.providers) {
+        if (p.models.includes(cfg.activeModel)) {
+          cfg.activeProvider = p.id;
+          break;
+        }
+      }
+    }
+    else if (key === 'activeProvider') cfg.activeProvider = value as string;
+    else if (key === 'maxTurns') cfg.agent.maxTurns = value as number;
+    else if (key === 'maxTokens') cfg.agent.maxTokens = value as number;
+    else if (key === 'contextLimit') cfg.agent.contextLimit = value as number;
+    else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
+    else if (key === 'deepseekApiKey') {
+      const ds = cfg.providers.find(p => p.id === 'deepseek');
+      if (ds) ds.apiKey = value as string;
+    }
+    else if (key === 'anthropicApiKey') {
+      const ant = cfg.providers.find(p => p.id === 'anthropic');
+      if (ant) ant.apiKey = value as string;
+    }
+    else if (key === 'baseUrl') {
+      const active = getActiveProvider();
+      active.baseUrl = value as string;
+    }
+    await saveConfig();
+    if (key === 'model' || key === 'activeProvider') {
+      sessionAgents.clear();
     }
   });
 
   ipcMain.handle('config:get-full', () => getConfig());
 
   ipcMain.handle('config:get-providers', () => {
-    const cfg = getConfig();
-    return [
-      { id: 'deepseek', name: 'DeepSeek', type: 'openai-compatible', models: cfg.deepseek.models },
-      { id: 'anthropic', name: 'Anthropic', type: 'anthropic', models: cfg.anthropic.models },
-    ];
+    return getConfig().providers.map(p => ({ id: p.id, name: p.name, models: p.models }));
   });
 
-  ipcMain.handle('config:set-provider', async (_event, id: string, pc: unknown) => {
-    const p = pc as { apiKey?: string; baseUrl?: string; models?: string[] };
+  ipcMain.handle('config:set-provider', async (_event, pc: ProviderConfig) => {
     const cfg = getConfig();
-    if (id === 'deepseek') {
-      if (p.apiKey !== undefined) cfg.deepseek.apiKey = p.apiKey;
-      if (p.baseUrl !== undefined) cfg.deepseek.baseUrl = p.baseUrl;
-      if (p.models !== undefined) cfg.deepseek.models = p.models;
-    } else if (id === 'anthropic') {
-      if (p.apiKey !== undefined) cfg.anthropic.apiKey = p.apiKey;
-      if (p.models !== undefined) cfg.anthropic.models = p.models;
+    const idx = cfg.providers.findIndex(p => p.id === pc.id);
+    if (idx >= 0) {
+      // Merge: don't overwrite non-empty values with empty ones
+      const existing = cfg.providers[idx];
+      cfg.providers[idx] = {
+        ...existing,
+        name: pc.name || existing.name,
+        baseUrl: pc.baseUrl || existing.baseUrl,
+        apiKey: pc.apiKey || existing.apiKey,
+        models: pc.models.length > 0 ? pc.models : existing.models,
+      };
+    } else {
+      cfg.providers.push(pc);
+    }
+    await saveConfig();
+  });
+
+  // Permission mode
+  ipcMain.handle('permission:get', () => currentPermissionMode);
+  ipcMain.handle('permission:set', (_event, mode: string) => {
+    const valid: string[] = ['default', 'acceptEdits', 'plan', 'bypass'];
+    if (valid.includes(mode)) {
+      currentPermissionMode = mode as PermissionMode;
+    }
+  });
+
+  ipcMain.handle('config:delete-provider', async (_event, id: string) => {
+    const cfg = getConfig();
+    cfg.providers = cfg.providers.filter(p => p.id !== id);
+    if (cfg.activeProvider === id) {
+      cfg.activeProvider = cfg.providers[0]?.id || 'deepseek';
     }
     await saveConfig();
   });
@@ -224,17 +311,17 @@ export function setupIpcHandlers(
   ipcMain.handle('session:save', async (_event, session: SessionData) => {
     await ensureSessionsDir();
     const filePath = join(sessionsDir(), `${session.id}.json`);
-    await fs.writeFile(filePath, JSON.stringify(session, null, 2), 'utf8');
+    let existing: SessionData | null = null;
+    try { const raw = await fs.readFile(filePath, 'utf8'); existing = JSON.parse(raw) as SessionData; } catch { /* */ }
+    const merged = { ...existing, ...session, updatedAt: session.updatedAt || Date.now() };
+    await fs.writeFile(filePath, JSON.stringify(merged, null, 2), 'utf8');
   });
 
   ipcMain.handle('session:load', async (_event, id: string) => {
     try {
-      const filePath = join(sessionsDir(), `${id}.json`);
-      const content = await fs.readFile(filePath, 'utf8');
+      const content = await fs.readFile(join(sessionsDir(), `${id}.json`), 'utf8');
       return JSON.parse(content) as SessionData;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   });
 
   ipcMain.handle('session:list', async () => {
@@ -243,34 +330,118 @@ export function setupIpcHandlers(
     const sessions: SessionData[] = [];
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
-      try {
-        const content = await fs.readFile(join(sessionsDir(), entry), 'utf8');
-        sessions.push(JSON.parse(content) as SessionData);
-      } catch {
-        // Skip corrupted files
-      }
+      try { const content = await fs.readFile(join(sessionsDir(), entry), 'utf8'); sessions.push(JSON.parse(content) as SessionData); } catch { /* */ }
     }
-    return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+    return sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   });
 
   ipcMain.handle('session:delete', async (_event, id: string) => {
+    sessionAbortControllers.get(id)?.abort();
+    sessionAbortControllers.delete(id);
+    sessionAgents.delete(id);
+    try { await fs.unlink(join(sessionsDir(), `${id}.json`)); } catch { /* */ }
+  });
+
+  ipcMain.handle('session:rename', async (_event, id: string, newTitle: string) => {
+    const filePath = join(sessionsDir(), `${id}.json`);
     try {
-      await fs.unlink(join(sessionsDir(), `${id}.json`));
+      const content = await fs.readFile(filePath, 'utf8');
+      const session = JSON.parse(content) as SessionData;
+      session.title = newTitle;
+      session.updatedAt = Date.now();
+      await fs.writeFile(filePath, JSON.stringify(session, null, 2), 'utf8');
+      return true;
+    } catch { return false; }
+  });
+
+  ipcMain.handle('session:generate-title', async (_event, userMessage: string) => {
+    try {
+      const p = getProvider();
+      if (!p) return null;
+
+      const result = await p.runStep({
+        messages: [
+          { role: 'system', content: 'Generate a very short title (4-6 words max) for a conversation. Reply with ONLY the title, no quotes, no explanation. Use the user\'s language.' },
+          { role: 'user', content: userMessage.slice(0, 500) },
+        ],
+        tools: [],
+        model: 'default',
+      });
+
+      const title = result.text.trim().slice(0, 80);
+      return title || null;
     } catch {
-      // File doesn't exist, ignore
+      return null;
     }
   });
 
   // ---- CLAUDE.md ----
-  ipcMain.handle('claude-md:reload', async () => {
-    const result = await discoverClaudeMd(getConfig().agent.workspaceRoot);
-    claudeMdContent = result.content;
-    persistentSession = null;
+  ipcMain.handle('agent-md:reload', async () => {
+    const result = await discoverAgentMd(getConfig().agent.workspaceRoot);
+    agentMdContent = result.content;
+    agentMdFiles = result.files;
+    sessionAgents.clear();
     return result.files;
   });
 
-  ipcMain.handle('claude-md:get', () => {
-    return { content: claudeMdContent };
+  ipcMain.handle('agent-md:get', () => {
+    return { content: agentMdContent, files: agentMdFiles };
+  });
+
+  ipcMain.handle('memory:list', async () => {
+    const { homedir } = require('os');
+    const dirs = [
+      join(getConfig().agent.workspaceRoot, '.deepseekcode', 'memory'),
+      join(homedir(), '.deepseekcode', 'memory'),
+    ];
+    const results: Array<{ name: string; path: string }> = [];
+    for (const memDir of dirs) {
+      try {
+        const entries = await fs.readdir(memDir, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isFile() && e.name.endsWith('.md')) {
+            results.push({ name: e.name.replace('.md', ''), path: join(memDir, e.name) });
+          }
+        }
+      } catch { /* dir not found */ }
+    }
+    return results;
+  });
+
+  ipcMain.handle('memory:read', async (_event, filePath: string) => {
+    // Memory files are outside workspace — allow direct read
+    return await fs.readFile(filePath, 'utf8');
+  });
+
+  ipcMain.handle('memory:write', async (_event, filePath: string, content: string) => {
+    await fs.writeFile(filePath, content, 'utf8');
+  });
+
+  // ---- Skills ----
+  ipcMain.handle('skills:list', () => {
+    return getLoadedSkills().map(s => ({
+      name: s.name,
+      description: s.description,
+      whenToUse: s.whenToUse,
+      argumentHint: s.argumentHint,
+      userInvocable: s.userInvocable,
+    }));
+  });
+
+  ipcMain.handle('skills:invoke', async (_event, skillName: string) => {
+    // Reload skills to ensure freshness
+    await loadSkills(getConfig().agent.workspaceRoot);
+    const { skillHandlers } = require('./tools/skill-tools');
+    return skillHandlers.invoke_skill({ skill: skillName });
+  });
+
+  ipcMain.handle('skills:write-content', async (_event, skillName: string, content: string) => {
+    await loadSkills(getConfig().agent.workspaceRoot);
+    const { getSkill } = require('./skills/loader');
+    const skill = getSkill(skillName);
+    if (!skill) return false;
+    await fs.writeFile(join(skill.rootDir, 'SKILL.md'), content, 'utf8');
+    return true;
   });
 
   // ---- Terminal ----
@@ -322,10 +493,17 @@ export function setupIpcHandlers(
   });
 }
 
-export async function initClaudeMd(): Promise<void> {
-  const result = await discoverClaudeMd(getConfig().agent.workspaceRoot);
-  claudeMdContent = result.content;
+export async function initAgentMd(): Promise<void> {
+  const result = await discoverAgentMd(getConfig().agent.workspaceRoot);
+  agentMdContent = result.content;
+  agentMdFiles = result.files;
 }
+
+export async function initSkills(): Promise<void> {
+  // Skills are already loaded in main/index.ts
+}
+
+export { getLoadedSkills } from './skills/loader';
 
 // Re-export for main/index.ts
 export { getConfig, setConfig, saveConfig } from './config';

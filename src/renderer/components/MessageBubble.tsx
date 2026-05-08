@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import type { ChatEntry } from '../stores/chat-store';
 import { DiffPreview } from './DiffPreview';
 import { MermaidBlock } from './MermaidBlock';
+import { ToolCallCard } from './ToolCallCard';
 
 interface Props {
   entry: ChatEntry;
@@ -21,27 +22,18 @@ export function MessageBubble({ entry }: Props) {
 
     return (
       <div className="message message-tool">
-        <div className="tool-header">
-          <span className="tool-icon">工具</span>
-          <span className="tool-name">{entry.toolName}</span>
-          {entry.toolArgs && (
-            <span className="tool-args">{entry.toolArgs.slice(0, 100)}</span>
-          )}
-        </div>
-        {diffData ? (
-          <DiffPreview data={diffData} />
-        ) : entry.toolResult ? (
-          <pre className="tool-result">{entry.toolResult.slice(0, 500)}</pre>
-        ) : null}
+        <ToolCallCard
+          toolName={entry.toolName || 'unknown'}
+          toolArgs={entry.toolArgs}
+          toolResult={diffData ? undefined : entry.toolResult}
+        />
+        {diffData && <DiffPreview data={diffData} />}
       </div>
     );
   }
 
   return (
     <div className={`message message-${entry.role}`}>
-      <div className="message-role">
-        {entry.role === 'user' ? '你' : entry.role === 'system' ? '系统' : '助手'}
-      </div>
       {entry.attachments && entry.attachments.length > 0 && (
         <div className="message-attachments">
           {entry.attachments.map((att, i) => (

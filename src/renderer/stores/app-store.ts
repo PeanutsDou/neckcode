@@ -7,10 +7,9 @@ interface AppState {
   currentModel: string;
   availableModels: string[];
   contextLimit: number | null;
-  compareMode: boolean;
-  compareModels: string[];
   leftWidth: number;
   rightWidth: number;
+  theme: 'light' | 'dark';
 
   toggleSidebar: () => void;
   toggleSessions: () => void;
@@ -18,10 +17,9 @@ interface AppState {
   setModel: (model: string) => void;
   setAvailableModels: (models: string[]) => void;
   setContextLimit: (limit: number | null) => void;
-  toggleCompareMode: () => void;
-  setCompareModels: (models: string[]) => void;
   setLeftWidth: (w: number) => void;
   setRightWidth: (w: number) => void;
+  setTheme: (t: 'light' | 'dark') => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -30,10 +28,9 @@ export const useAppStore = create<AppState>((set) => ({
   currentModel: 'deepseek-v4-pro',
   availableModels: ['deepseek-v4-pro', 'deepseek-v4-flash'],
   contextLimit: null,
-  compareMode: false,
-  compareModels: ['deepseek-v4-pro', 'deepseek-v4-flash'],
   leftWidth: 220,
   rightWidth: 420,
+  theme: 'light',
 
   toggleSidebar: () => set(s => ({ showSidebar: !s.showSidebar })),
   toggleSessions: () => set(s => ({ showSessions: !s.showSessions })),
@@ -41,8 +38,7 @@ export const useAppStore = create<AppState>((set) => ({
   setModel: (model) => set({ currentModel: model }),
   setAvailableModels: (models) => set({ availableModels: models }),
   setContextLimit: (limit) => set({ contextLimit: limit }),
-  toggleCompareMode: () => set(s => ({ compareMode: !s.compareMode })),
-  setCompareModels: (models) => set({ compareModels: models }),
   setLeftWidth: (w) => set(s => ({ leftWidth: Math.max(160, Math.min(500, s.leftWidth + w)) })),
   setRightWidth: (w) => set(s => ({ rightWidth: Math.max(300, Math.min(800, s.rightWidth + w)) })),
+  setTheme: (theme) => set({ theme }),
 }));

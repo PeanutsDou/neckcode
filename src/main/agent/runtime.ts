@@ -1,6 +1,21 @@
 import { ChatSession } from './session';
 import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message, Attachment } from './types';
 
+function partitionToolCalls(toolCalls: ToolCall[], toolDefs: ToolDefinition[]): { concurrent: boolean; calls: ToolCall[] }[] {
+  const batches: { concurrent: boolean; calls: ToolCall[] }[] = [];
+  for (const tc of toolCalls) {
+    const def = toolDefs.find(d => d.function.name === tc.name);
+    const concurrent = def?.readOnly === true;
+    const last = batches.at(-1);
+    if (concurrent && last?.concurrent) {
+      last.calls.push(tc);
+    } else {
+      batches.push({ concurrent, calls: [tc] });
+    }
+  }
+  return batches;
+}
+
 export interface Provider {
   runStep(params: {
     messages: Message[];
@@ -26,6 +41,14 @@ export class AgentRuntime {
     systemPrompt?: string,
   ) {
     this.session = new ChatSession(systemPrompt);
+  }
+
+  loadMessages(messages: Message[]): void {
+    this.session.setMessages(messages);
+  }
+
+  getMessages(): Message[] {
+    return this.session.getMessages();
   }
 
   clear(): void {
@@ -65,11 +88,30 @@ export class AgentRuntime {
           return step;
         }
 
-        for (const toolCall of step.toolCalls) {
-          callbacks.onToolStart?.(toolCall);
-          const result = await this.tools.execute(toolCall);
-          this.session.addToolResult(toolCall.id, result);
-          callbacks.onToolResult?.(toolCall, result);
+        const batches = partitionToolCalls(step.toolCalls, this.tools.getDefinitions());
+        for (const batch of batches) {
+          if (batch.concurrent) {
+            // Read-only tools: execute concurrently, preserve order
+            const results = await Promise.all(
+              batch.calls.map(async (tc) => {
+                callbacks.onToolStart?.(tc);
+                const result = await this.tools.execute(tc);
+                return { tc, result };
+              })
+            );
+            for (const { tc, result } of results) {
+              this.session.addToolResult(tc.id, result);
+              callbacks.onToolResult?.(tc, result);
+            }
+          } else {
+            // Write/non-readOnly tools: execute serially
+            for (const tc of batch.calls) {
+              callbacks.onToolStart?.(tc);
+              const result = await this.tools.execute(tc);
+              this.session.addToolResult(tc.id, result);
+              callbacks.onToolResult?.(tc, result);
+            }
+          }
         }
       }
 

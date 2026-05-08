@@ -1,7 +1,8 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { useChatStore } from '../stores/chat-store';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { useChatStore, getSessionId, useActiveIsStreaming, useActivePendingContext } from '../stores/chat-store';
 import { useAppStore } from '../stores/app-store';
 import { CustomSelect } from './CustomSelect';
+import { PermissionToggle } from './PermissionToggle';
 
 interface SlashCommand {
   name: string;
@@ -15,6 +16,14 @@ interface ImageAttachment {
   size: number;
 }
 
+interface SkillInfo {
+  name: string;
+  description: string;
+  whenToUse?: string;
+  argumentHint?: string;
+  userInvocable: boolean;
+}
+
 export function ChatInput() {
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -25,11 +34,32 @@ export function ChatInput() {
   const [showCommands, setShowCommands] = useState(false);
   const [commandIdx, setCommandIdx] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { addEntry, setStreaming, isStreaming, pendingContext, setPendingContext, clear } = useChatStore();
+  const { addEntryTo, setStreamingTo, clearActive, setPendingContext } = useChatStore();
+  const isStreaming = useActiveIsStreaming();
+  const pendingContext = useActivePendingContext();
   const { setModel, availableModels, currentModel } = useAppStore();
+  const [skillCommands, setSkillCommands] = useState<SlashCommand[]>([]);
+
+  useEffect(() => {
+    window.electronAPI?.listSkills().then(skills => {
+      const cmds: SlashCommand[] = (skills as SkillInfo[])
+        .filter(s => s.userInvocable)
+        .map(s => ({
+          name: `/${s.name}`,
+          desc: s.argumentHint || s.description.slice(0, 60),
+          handler: async (args: string) => {
+            try {
+              const content = await window.electronAPI.invokeSkill(s.name);
+              setPendingContext(content);
+            } catch { /* skill load failed */ }
+          },
+        }));
+      setSkillCommands(cmds);
+    }).catch(() => {});
+  }, []);
 
   const commands: SlashCommand[] = [
-    { name: '/clear', desc: '清空对话', handler: () => clear() },
+    { name: '/clear', desc: '清空对话', handler: () => { const sid = getSessionId() || ''; clearActive(); window.electronAPI?.resetAgent(sid); } },
     { name: '/model', desc: '切换模型', handler: (args) => {
         const m = availableModels.find(x => x.includes(args.trim()));
         if (m) setModel(m);
@@ -39,6 +69,7 @@ export function ChatInput() {
     }},
     { name: '/commit', desc: '生成 commit 信息', handler: () => setText('为暂存的改动生成一条简洁的 git commit') },
     { name: '/review', desc: '代码审查', handler: () => setText('审查暂存的改动，检查问题') },
+    ...skillCommands,
   ];
 
   const filteredCommands = text.startsWith('/') && !text.includes(' ')
@@ -116,13 +147,14 @@ export function ChatInput() {
     let message = text.trim();
     if (pendingContext) message = `${message}\n\n\`\`\`\n${pendingContext}\n\`\`\``;
 
+    const sid = useChatStore.getState().ensureActiveSession();
     const attachments = images.map(img => ({ type: 'image' as const, data: img.data, mimeType: 'image/png', name: img.name, size: img.size }));
-    addEntry({ id: Date.now().toString(), role: 'user', content: message, attachments, timestamp: Date.now() });
+    addEntryTo(sid, { id: Date.now().toString(), role: 'user', content: message, attachments, timestamp: Date.now() });
 
     setText('');
     setImages([]);
     setPendingContext(null);
-    setStreaming(true);
+    setStreamingTo(sid, true);
 
     try {
       const apiAttachments = images.map(img => ({
@@ -130,15 +162,16 @@ export function ChatInput() {
         data: img.data,
         mimeType: img.data.startsWith('data:image/png') ? 'image/png' : img.data.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
       }));
-      await window.electronAPI.sendMessage(message, apiAttachments);
+      await window.electronAPI.sendMessage(sid, message, apiAttachments);
     } catch (err) {
-      useChatStore.getState().setError(err instanceof Error ? err.message : String(err));
+      useChatStore.getState().setErrorTo(sid, err instanceof Error ? err.message : String(err));
     }
   };
 
   const handleStop = () => {
-    window.electronAPI.abort();
-    useChatStore.getState().setStreaming(false);
+    const sid = getSessionId() || '';
+    window.electronAPI.abort(sid);
+    if (sid) useChatStore.getState().setStreamingTo(sid, false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -191,6 +224,7 @@ export function ChatInput() {
           style={{ height: inputHeight }} />
 
         <div className="input-controls">
+          <PermissionToggle />
           <CustomSelect
             value={currentModel}
             options={availableModels}

@@ -4,7 +4,8 @@ import { setupIpcHandlers } from './ipc-handlers';
 import { createOpenAIProvider } from './providers/openai-compatible';
 import { createAnthropicProvider } from './providers/anthropic';
 import { createToolRegistry } from './tools/registry';
-import { loadConfig, saveConfig, getConfig } from './config';
+import { loadConfig, saveConfig, getConfig, getActiveProvider } from './config';
+import { loadSkills } from './skills/loader';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 
@@ -14,25 +15,29 @@ let toolRegistry: ToolRegistry | null = null;
 
 function createProvider(): Provider {
   const cfg = getConfig();
+  const active = getActiveProvider();
   const model = cfg.activeModel;
 
-  if (model.startsWith('claude-')) {
+  if (active.id === 'anthropic') {
     return createAnthropicProvider({
-      apiKey: cfg.anthropic.apiKey || process.env.ANTHROPIC_API_KEY || '',
+      apiKey: active.apiKey || process.env.ANTHROPIC_API_KEY || '',
       model,
+      maxTokens: cfg.agent.maxTokens,
     });
   }
 
   return createOpenAIProvider({
-    baseUrl: cfg.deepseek.baseUrl,
-    apiKey: cfg.deepseek.apiKey,
+    baseUrl: active.baseUrl,
+    apiKey: active.apiKey,
     model,
+    maxTokens: cfg.agent.maxTokens,
   });
 }
 
 function getOrCreateTools(): ToolRegistry {
   if (!toolRegistry) {
-    const { dialog } = require('electron');
+    const { dialog, BrowserWindow } = require('electron');
+    const { getPermissionMode } = require('./ipc-handlers');
     toolRegistry = createToolRegistry(
       getConfig().agent.workspaceRoot,
       async (message: string) => {
@@ -47,6 +52,20 @@ function getOrCreateTools(): ToolRegistry {
         });
         return result.response === 1;
       },
+      async (questions) => {
+        return new Promise((resolve, reject) => {
+          // We need access to the IPC ask mechanism. Use a global approach.
+          const win = BrowserWindow.getAllWindows()[0];
+          if (!win) { reject(new Error('No window')); return; }
+          // Send questions to renderer and wait for response
+          const askId = `ask_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          // Register the pending promise via a module-level store
+          const { pendingAsks } = require('./ipc-handlers');
+          pendingAsks.set(askId, { resolve, reject });
+          win.webContents.send('ask:show', askId, questions);
+        });
+      },
+      () => getPermissionMode(),
     );
   }
   return toolRegistry;
@@ -64,6 +83,10 @@ function createWindow(): void {
   const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
   const saved = getConfig().window;
 
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '../../resources/icon.png');
+
   mainWindow = new BrowserWindow({
     x: saved?.x,
     y: saved?.y,
@@ -72,6 +95,7 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     title: 'DeepSeek Code',
+    icon: iconPath,
     frame: false,
     backgroundColor: '#f6f3ee',
     webPreferences: {
@@ -85,7 +109,6 @@ function createWindow(): void {
   const isDev = !app.isPackaged;
   if (isDev) {
     mainWindow.loadURL('http://localhost:5175');
-    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
@@ -109,18 +132,11 @@ function createWindow(): void {
 }
 
 function createTray(): void {
-  // Create a simple 16x16 colored icon (blue square)
-  const size = 16;
-  const buf = Buffer.alloc(size * size * 4);
-  for (let i = 0; i < size * size; i++) {
-    const off = i * 4;
-    buf[off] = 137;    // R
-    buf[off + 1] = 180; // G
-    buf[off + 2] = 250; // B
-    buf[off + 3] = 255; // A
-  }
-  const icon = nativeImage.createFromBuffer(buf, { width: size, height: size });
-  tray = new Tray(icon);
+  const trayIconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '../../resources/icon.png');
+  const trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 });
+  tray = new Tray(trayIcon);
   tray.setToolTip('DeepSeek Code');
 
   const contextMenu = Menu.buildFromTemplate([
@@ -150,9 +166,11 @@ function createTray(): void {
 
 app.whenReady().then(async () => {
   await loadConfig();
+  await loadSkills(getConfig().agent.workspaceRoot);
   setupIpcHandlers(createProvider, getOrCreateTools);
-  const { initClaudeMd } = require('./ipc-handlers');
-  await initClaudeMd();
+  const { initAgentMd, initSkills } = require('./ipc-handlers');
+  await initAgentMd();
+  await initSkills();
   createWindow();
   createTray();
 

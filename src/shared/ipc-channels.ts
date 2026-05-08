@@ -19,4 +19,8 @@ export const IPC = {
   // Provider/Config
   CONFIG_GET: 'config:get',
   PROVIDER_LIST: 'provider:list',
+
+  // Skills
+  SKILLS_LIST: 'skills:list',
+  SKILLS_INVOKE: 'skills:invoke',
 } as const;

@@ -1,4 +1,4 @@
-import React, { Component, useState } from 'react';
+import React, { Component, useState, useEffect } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { FileTree } from './components/FileTree';
 import { EditorTabs } from './components/EditorTabs';
@@ -6,8 +6,9 @@ import { EditorPanel } from './components/EditorPanel';
 import { SessionList } from './components/SessionList';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ContextBar } from './components/ContextBar';
-import { TerminalPanel } from './components/TerminalPanel';
-import { ModelCompare } from './components/ModelCompare';
+import { AskDialog } from './components/AskDialog';
+import { SkillsDialog } from './components/SkillsDialog';
+import { MemoryDialog } from './components/MemoryDialog';
 import { ResizeHandle } from './components/ResizeHandle';
 import { useAppStore } from './stores/app-store';
 
@@ -44,8 +45,14 @@ function handleClose() {
 }
 
 export default function App() {
-  const { showSidebar, toggleSidebar, showSessions, showTerminal, toggleTerminal, leftWidth, rightWidth, setLeftWidth, setRightWidth } = useAppStore();
+  const { showSidebar, toggleSidebar, showSessions, leftWidth, rightWidth, setLeftWidth, setRightWidth, theme, setTheme } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   return (
     <ErrorBoundary>
@@ -57,15 +64,21 @@ export default function App() {
           </div>
           <div className="toolbar-center" />
           <div className="toolbar-right">
-            <button
-              className={`toolbar-btn ${showTerminal ? 'active' : ''}`}
-              onClick={toggleTerminal}
-            >
-              终端
+            <button className="toolbar-btn" onClick={() => setSkillsOpen(true)}>
+              技能
             </button>
-            <ModelCompare />
+            <button className="toolbar-btn" onClick={() => setMemoryOpen(true)}>
+              记忆
+            </button>
             <button className="toolbar-btn" onClick={() => setSettingsOpen(true)}>
               设置
+            </button>
+            <button
+              className="toolbar-btn"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              title="切换主题"
+            >
+              {theme === 'dark' ? '☀' : '☾'}
             </button>
             <button
               className={`toolbar-btn icon-btn ${showSidebar ? 'active' : ''}`}
@@ -119,12 +132,10 @@ export default function App() {
         </div>
 
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <SkillsDialog open={skillsOpen} onClose={() => setSkillsOpen(false)} />
+        <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
 
-        {showTerminal && (
-          <div className="terminal-area">
-            <TerminalPanel visible={showTerminal} />
-          </div>
-        )}
+        <AskDialog />
       </div>
     </ErrorBoundary>
   );
