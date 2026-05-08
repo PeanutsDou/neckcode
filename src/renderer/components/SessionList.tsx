@@ -74,7 +74,7 @@ export function SessionList() {
       <div className="session-list-header">
         <span className="session-list-title">Sessions</span>
         <div className="session-list-actions">
-          <button className="session-btn" onClick={handleNew} title="New session">+</button>
+          <button className="session-btn" onClick={handleNew} title="新建会话">＋</button>
         </div>
       </div>
       <div className="session-list-items">

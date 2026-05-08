@@ -3,12 +3,12 @@ import { ChatPanel } from './components/ChatPanel';
 import { FileTree } from './components/FileTree';
 import { EditorTabs } from './components/EditorTabs';
 import { EditorPanel } from './components/EditorPanel';
-import { ModelSwitcher } from './components/ModelSwitcher';
 import { SessionList } from './components/SessionList';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ContextBar } from './components/ContextBar';
 import { TerminalPanel } from './components/TerminalPanel';
 import { ModelCompare } from './components/ModelCompare';
+import { ResizeHandle } from './components/ResizeHandle';
 import { useAppStore } from './stores/app-store';
 
 class ErrorBoundary extends Component<
@@ -20,7 +20,7 @@ class ErrorBoundary extends Component<
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 40, color: '#f38ba8', fontFamily: 'monospace' }}>
+        <div style={{ padding: 40, color: '#b87070', fontFamily: 'monospace' }}>
           <h2>App Error</h2>
           <pre>{this.state.error.message}</pre>
           <pre>{this.state.error.stack}</pre>
@@ -31,53 +31,71 @@ class ErrorBoundary extends Component<
   }
 }
 
+function handleMinimize() {
+  window.electronAPI?.minimize?.();
+}
+
+function handleMaximize() {
+  window.electronAPI?.maximize?.();
+}
+
+function handleClose() {
+  window.electronAPI?.close?.();
+}
+
 export default function App() {
-  const { showSidebar, toggleSidebar, showSessions, toggleSessions, showTerminal, toggleTerminal } = useAppStore();
+  const { showSidebar, toggleSidebar, showSessions, showTerminal, toggleTerminal, leftWidth, rightWidth, setLeftWidth, setRightWidth } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <ErrorBoundary>
       <div className="app-container">
-        {/* Toolbar */}
+        {/* Title bar */}
         <div className="toolbar">
           <div className="toolbar-left">
-            <button
-              className={`toolbar-btn ${showSessions ? 'active' : ''}`}
-              onClick={toggleSessions}
-              title="Toggle sessions"
-            >
-              &#x1F4CB;
-            </button>
             <span className="toolbar-title">DeepSeek Code</span>
           </div>
-          <div className="toolbar-center">
-            <ModelSwitcher />
-            <ContextBar />
-          </div>
+          <div className="toolbar-center" />
           <div className="toolbar-right">
-            <button className={`toolbar-btn ${showTerminal ? 'active' : ''}`} onClick={toggleTerminal} title="Terminal">
-              &#x1F4BB;
+            <button
+              className={`toolbar-btn ${showTerminal ? 'active' : ''}`}
+              onClick={toggleTerminal}
+            >
+              终端
             </button>
             <ModelCompare />
-            <button className="toolbar-btn" onClick={() => setSettingsOpen(true)} title="Settings">
-              &#x2699;
+            <button className="toolbar-btn" onClick={() => setSettingsOpen(true)}>
+              设置
             </button>
             <button
-              className={`toolbar-btn ${showSidebar ? 'active' : ''}`}
+              className={`toolbar-btn icon-btn ${showSidebar ? 'active' : ''}`}
               onClick={toggleSidebar}
-              title="Toggle code panel"
+              title="代码面板"
             >
-              &#x1F4C4;
+              <span className="icon-lines">
+                <i /><i /><i />
+              </span>
             </button>
+            <div className="window-controls">
+              <button className="window-btn" onClick={handleMinimize}>—</button>
+              <button className="window-btn" onClick={handleMaximize}>□</button>
+              <button className="window-btn close" onClick={handleClose}>×</button>
+            </div>
           </div>
         </div>
 
         {/* Main content */}
         <div className="main-content">
           {showSessions && (
-            <div className="sidebar-left">
-              <SessionList />
-            </div>
+            <>
+              <div className="sidebar-left" style={{ width: leftWidth }}>
+                <SessionList />
+                <div className="sidebar-left-bottom">
+                  <ContextBar />
+                </div>
+              </div>
+              <ResizeHandle direction="left" onResize={setLeftWidth} />
+            </>
           )}
 
           <div className="chat-main">
@@ -85,15 +103,18 @@ export default function App() {
           </div>
 
           {showSidebar && (
-            <div className="sidebar-right">
-              <div className="sidebar-right-section">
-                <FileTree />
+            <>
+              <ResizeHandle direction="right" onResize={setRightWidth} />
+              <div className="sidebar-right" style={{ width: rightWidth, minWidth: 300, maxWidth: 800 }}>
+                <div className="sidebar-right-section">
+                  <FileTree />
+                </div>
+                <div className="sidebar-right-section editor-section">
+                  <EditorTabs />
+                  <EditorPanel />
+                </div>
               </div>
-              <div className="sidebar-right-section editor-section">
-                <EditorTabs />
-                <EditorPanel />
-              </div>
-            </div>
+            </>
           )}
         </div>
 

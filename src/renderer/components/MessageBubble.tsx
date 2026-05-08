@@ -22,7 +22,7 @@ export function MessageBubble({ entry }: Props) {
     return (
       <div className="message message-tool">
         <div className="tool-header">
-          <span className="tool-icon">&#x2699;</span>
+          <span className="tool-icon">工具</span>
           <span className="tool-name">{entry.toolName}</span>
           {entry.toolArgs && (
             <span className="tool-args">{entry.toolArgs.slice(0, 100)}</span>
@@ -40,7 +40,7 @@ export function MessageBubble({ entry }: Props) {
   return (
     <div className={`message message-${entry.role}`}>
       <div className="message-role">
-        {entry.role === 'user' ? 'You' : entry.role === 'system' ? 'System' : 'Assistant'}
+        {entry.role === 'user' ? '你' : entry.role === 'system' ? '系统' : '助手'}
       </div>
       {entry.attachments && entry.attachments.length > 0 && (
         <div className="message-attachments">

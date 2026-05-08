@@ -26,8 +26,8 @@ export function FileTree() {
     <div className="file-tree">
       <div className="file-tree-header">
         <span className="file-tree-title">Files</span>
-        <button className="file-tree-refresh" onClick={() => loadFileTree(currentDir)} title="Refresh">
-          &#x21bb;
+        <button className="file-tree-refresh" onClick={() => loadFileTree(currentDir)} title="刷新">
+          刷新
         </button>
       </div>
       <div className="file-tree-path">
@@ -44,7 +44,7 @@ export function FileTree() {
             className={`file-tree-item ${entry.isDir ? 'is-dir' : 'is-file'}`}
             onClick={() => handleClick(entry)}
           >
-            <span className="file-icon">{entry.isDir ? '\u{1F4C1}' : '\u{1F4C4}'}</span>
+            <span className="file-icon">{entry.isDir ? '▸' : '—'}</span>
             <span className="file-name">{entry.name}</span>
           </div>
         ))}

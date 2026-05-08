@@ -307,6 +307,15 @@ export function setupIpcHandlers(
     }
   });
 
+  // ---- Window controls ----
+  ipcMain.handle('window:minimize', () => getWindow()?.minimize());
+  ipcMain.handle('window:maximize', () => {
+    const w = getWindow();
+    if (w?.isMaximized()) w.unmaximize();
+    else w?.maximize();
+  });
+  ipcMain.handle('window:close', () => getWindow()?.close());
+
   ipcMain.handle('terminal:stop', () => {
     termProcess?.kill();
     termProcess = null;

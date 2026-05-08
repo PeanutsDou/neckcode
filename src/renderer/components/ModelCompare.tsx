@@ -24,19 +24,14 @@ export function ModelCompare() {
 
   if (!compareMode) {
     return (
-      <button className="toolbar-btn" onClick={toggleCompareMode} title="Compare models">
-        &#x2696;
+      <button className={`toolbar-btn ${compareMode ? 'active' : ''}`} onClick={toggleCompareMode}>
+        对比
       </button>
     );
   }
 
   return (
-    <>
-      <button className="toolbar-btn active" onClick={toggleCompareMode} title="Exit compare mode">
-        &#x2696;
-      </button>
-
-      <div className="compare-overlay">
+    <div className="compare-overlay">
         <div className="compare-dialog">
           <div className="compare-header">
             <h3>Model Compare</h3>
@@ -81,6 +76,5 @@ export function ModelCompare() {
           )}
         </div>
       </div>
-    </>
   );
 }

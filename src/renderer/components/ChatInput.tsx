@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { useChatStore } from '../stores/chat-store';
 import { useAppStore } from '../stores/app-store';
+import { CustomSelect } from './CustomSelect';
 
 interface SlashCommand {
   name: string;
@@ -9,7 +10,7 @@ interface SlashCommand {
 }
 
 interface ImageAttachment {
-  data: string;   // base64 data URI
+  data: string;
   name: string;
   size: number;
 }
@@ -17,32 +18,32 @@ interface ImageAttachment {
 export function ChatInput() {
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [inputHeight, setInputHeight] = useState(80);
+  const dragRef = useRef(false);
+  const startY = useRef(0);
+  const startH = useRef(80);
   const [showCommands, setShowCommands] = useState(false);
   const [commandIdx, setCommandIdx] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { addEntry, setStreaming, isStreaming, pendingContext, setPendingContext, clear } = useChatStore();
-  const { setModel, availableModels } = useAppStore();
+  const { setModel, availableModels, currentModel } = useAppStore();
 
   const commands: SlashCommand[] = [
-    { name: '/clear', desc: 'Clear conversation history', handler: () => clear() },
-    {
-      name: '/model', desc: 'Switch model (e.g. /model deepseek-v4-flash)',
-      handler: (args) => {
-        const m = availableModels.find(x => x.includes(args.trim()) || x === args.trim());
+    { name: '/clear', desc: '清空对话', handler: () => clear() },
+    { name: '/model', desc: '切换模型', handler: (args) => {
+        const m = availableModels.find(x => x.includes(args.trim()));
         if (m) setModel(m);
-      },
-    },
-    { name: '/file', desc: 'Read file content into context',
-      handler: async (args) => {
+    }},
+    { name: '/file', desc: '读文件到上下文', handler: async (args) => {
         try { setPendingContext(await window.electronAPI.readFile(args.trim())); } catch { /* */ }
-      },
-    },
-    { name: '/commit', desc: 'Generate git commit message', handler: () => setText('Generate a concise git commit message for the staged changes.') },
-    { name: '/review', desc: 'Review changes for bugs', handler: () => setText('Review the staged changes for bugs, security issues, and code quality. Be thorough.') },
+    }},
+    { name: '/commit', desc: '生成 commit 信息', handler: () => setText('为暂存的改动生成一条简洁的 git commit') },
+    { name: '/review', desc: '代码审查', handler: () => setText('审查暂存的改动，检查问题') },
   ];
 
   const filteredCommands = text.startsWith('/') && !text.includes(' ')
     ? commands.filter(c => c.name.startsWith(text)) : [];
+  const canSend = text.trim().length > 0 || images.length > 0;
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value;
@@ -57,84 +58,66 @@ export function ChatInput() {
     setShowCommands(false);
   };
 
-  // Handle image paste
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (const item of items) {
+    for (const item of e.clipboardData.items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
         const blob = item.getAsFile();
         if (!blob) continue;
         const reader = new FileReader();
-        reader.onload = () => {
-          setImages(prev => [...prev, {
-            data: reader.result as string,
-            name: `pasted-${Date.now()}.png`,
-            size: blob.size,
-          }]);
-        };
+        reader.onload = () => setImages(prev => [...prev, { data: reader.result as string, name: `paste-${Date.now()}.png`, size: blob.size }]);
         reader.readAsDataURL(blob);
       }
     }
   }, []);
 
-  // Handle file/image drop
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = true;
+    startY.current = e.clientY;
+    startH.current = inputHeight;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const delta = startY.current - ev.clientY;
+      setInputHeight(Math.max(80, Math.min(400, startH.current + delta)));
+    };
+    const onUp = () => {
+      dragRef.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [inputHeight]);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    const files = e.dataTransfer.files;
-    for (const file of files) {
+    for (const file of e.dataTransfer.files) {
       if (file.type.startsWith('image/')) {
         const reader = new FileReader();
-        reader.onload = () => {
-          setImages(prev => [...prev, {
-            data: reader.result as string,
-            name: file.name,
-            size: file.size,
-          }]);
-        };
+        reader.onload = () => setImages(prev => [...prev, { data: reader.result as string, name: file.name, size: file.size }]);
         reader.readAsDataURL(file);
       } else {
-        // Read text files as context
         const reader = new FileReader();
-        reader.onload = () => {
-          setPendingContext(reader.result as string);
-        };
+        reader.onload = () => setPendingContext(reader.result as string);
         reader.readAsText(file);
       }
     }
   }, [setPendingContext]);
 
-  const removeImage = (idx: number) => {
-    setImages(prev => prev.filter((_, i) => i !== idx));
-  };
-
   const handleSend = async () => {
-    const trimmed = text.trim();
-    if ((!trimmed && images.length === 0) || isStreaming) return;
-
-    if (showCommands && filteredCommands.length > 0 && trimmed === filteredCommands[commandIdx]?.name) {
+    if (!canSend || isStreaming) return;
+    if (showCommands && filteredCommands.length > 0 && text.trim() === filteredCommands[commandIdx]?.name) {
       executeCommand(filteredCommands[commandIdx]);
       return;
     }
 
-    let message = trimmed;
-    if (pendingContext) {
-      message = `${trimmed}\n\nContext:\n\`\`\`\n${pendingContext}\n\`\`\``;
-    }
+    let message = text.trim();
+    if (pendingContext) message = `${message}\n\n\`\`\`\n${pendingContext}\n\`\`\``;
 
-    // Include images as markdown-like notation
-    if (images.length > 0) {
-      const imgDesc = images.map((img, i) => `[Image ${i + 1}: ${img.name} (${(img.size / 1024).toFixed(1)}KB)]`).join('\n');
-      message = message ? `${message}\n\n${imgDesc}` : imgDesc;
-    }
-
-    addEntry({
-      id: Date.now().toString(), role: 'user', content: message,
-      attachments: images.length > 0 ? images.map(img => ({
-        type: 'image' as const, data: img.data, name: img.name, size: img.size,
-      })) : undefined,
-      timestamp: Date.now(),
-    });
+    const attachments = images.map(img => ({ type: 'image' as const, data: img.data, mimeType: 'image/png', name: img.name, size: img.size }));
+    addEntry({ id: Date.now().toString(), role: 'user', content: message, attachments, timestamp: Date.now() });
 
     setText('');
     setImages([]);
@@ -142,17 +125,20 @@ export function ChatInput() {
     setStreaming(true);
 
     try {
-      const attachments = images.map(img => ({
+      const apiAttachments = images.map(img => ({
         type: 'image' as const,
         data: img.data,
-        mimeType: img.data.startsWith('data:image/png') ? 'image/png' :
-                 img.data.startsWith('data:image/jpeg') ? 'image/jpeg' :
-                 img.data.startsWith('data:image/gif') ? 'image/gif' : 'image/png',
+        mimeType: img.data.startsWith('data:image/png') ? 'image/png' : img.data.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
       }));
-      await window.electronAPI.sendMessage(message, attachments);
+      await window.electronAPI.sendMessage(message, apiAttachments);
     } catch (err) {
       useChatStore.getState().setError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  const handleStop = () => {
+    window.electronAPI.abort();
+    useChatStore.getState().setStreaming(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -167,6 +153,7 @@ export function ChatInput() {
 
   return (
     <div className="chat-input-area" onDrop={handleDrop} onDragOver={e => e.preventDefault()}>
+      <div className="input-resize-handle" onMouseDown={handleResizeStart} />
       <div className="chat-input-wrapper">
         {showCommands && filteredCommands.length > 0 && (
           <div className="slash-commands">
@@ -181,7 +168,7 @@ export function ChatInput() {
         )}
         {pendingContext && (
           <div className="pending-context">
-            <span className="pending-context-label">Context:</span>
+            <span className="pending-context-label">上下文</span>
             <span className="pending-context-preview">{pendingContext.slice(0, 80)}{pendingContext.length > 80 ? '...' : ''}</span>
             <button className="pending-context-dismiss" onClick={() => setPendingContext(null)}>&times;</button>
           </div>
@@ -192,26 +179,39 @@ export function ChatInput() {
               <div key={i} className="image-preview-item">
                 <img src={img.data} alt={img.name} className="image-preview-thumb" />
                 <span className="image-preview-name">{img.name}</span>
-                <button className="pending-context-dismiss" onClick={() => removeImage(i)}>&times;</button>
+                <button className="pending-context-dismiss" onClick={() => setImages(prev => prev.filter((_, j) => j !== i))}>&times;</button>
               </div>
             ))}
           </div>
         )}
         <textarea ref={inputRef} className="chat-input" value={text}
           onChange={handleChange} onKeyDown={handleKeyDown} onPaste={handlePaste}
-          placeholder="Enter to send | Paste/drag images | / for commands"
-          rows={3} disabled={isStreaming} />
-      </div>
-      <div className="chat-input-actions">
-        {isStreaming ? (
-          <button className="btn btn-stop" onClick={() => { window.electronAPI.abort(); useChatStore.getState().setStreaming(false); }}>
-            Stop
-          </button>
-        ) : (
-          <button className="btn btn-send" onClick={handleSend} disabled={!text.trim() && images.length === 0}>
-            Send
-          </button>
-        )}
+          placeholder="输入消息，Enter 发送，/ 命令"
+          disabled={isStreaming}
+          style={{ height: inputHeight }} />
+
+        <div className="input-controls">
+          <CustomSelect
+            value={currentModel}
+            options={availableModels}
+            onChange={setModel}
+          />
+
+          {isStreaming ? (
+            <button className="send-btn sending" onClick={handleStop} title="停止">
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="2" y="2" width="8" height="8" rx="1.5" />
+              </svg>
+            </button>
+          ) : (
+            <button className="send-btn" onClick={handleSend} disabled={!canSend} title="发送">
+              <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="7" y1="11" x2="7" y2="3" />
+                <polyline points="4,6 7,3 10,6" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

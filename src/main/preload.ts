@@ -48,6 +48,11 @@ const api = {
   readFile: (filePath: string) => ipcRenderer.invoke('fs:read-file', filePath),
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:write-file', filePath, content),
 
+  // Window controls
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  maximize: () => ipcRenderer.invoke('window:maximize'),
+  close: () => ipcRenderer.invoke('window:close'),
+
   // Terminal
   startTerminal: () => ipcRenderer.invoke('terminal:start'),
   writeTerminal: (text: string) => ipcRenderer.invoke('terminal:write', text),

@@ -72,6 +72,8 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     title: 'DeepSeek Code',
+    frame: false,
+    backgroundColor: '#f6f3ee',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

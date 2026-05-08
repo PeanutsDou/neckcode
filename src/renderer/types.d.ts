@@ -10,6 +10,11 @@ export interface ElectronAPI {
   abort: () => Promise<void>;
   compare: (text: string, models: string[]) => Promise<{ model: string; text: string; error?: string }[]>;
 
+  // Window controls
+  minimize: () => Promise<void>;
+  maximize: () => Promise<void>;
+  close: () => Promise<void>;
+
   // Agent events (returns unsubscribe function)
   onDelta: (cb: (text: string) => void) => () => void;
   onToolStart: (cb: (data: unknown) => void) => () => void;
