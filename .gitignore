@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 *.db
+.sessions/
 # Compiled TS artifacts in src/
 src/**/*.js
 src/**/*.js.map

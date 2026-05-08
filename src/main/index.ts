@@ -2,19 +2,22 @@ import { app, BrowserWindow, screen } from 'electron';
 import path from 'path';
 import { setupIpcHandlers } from './ipc-handlers';
 import { createOpenAIProvider } from './providers/openai-compatible';
+import { createAnthropicProvider } from './providers/anthropic';
 import { createToolRegistry } from './tools/registry';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 
 let mainWindow: BrowserWindow | null = null;
 
-// Store config in a simple object for MVP
 const config = {
-  provider: {
+  deepseek: {
     baseUrl: 'https://api.deepseek.com/v1',
     apiKey: 'sk-fe2779230ca44d54ae075fc8d7eb9e36',
-    model: 'deepseek-v4-pro',
     models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+  },
+  anthropic: {
+    apiKey: '', // Set via settings UI
+    models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
   },
   agent: {
     maxTurns: 8,
@@ -24,14 +27,26 @@ const config = {
     'You are a helpful coding assistant. Use tools when needed. Be concise and factual.',
 };
 
-let currentProvider: Provider | null = null;
 let toolRegistry: ToolRegistry | null = null;
 
 function getOrCreateProvider(): Provider {
-  if (!currentProvider) {
-    currentProvider = createOpenAIProvider(config.provider);
+  const { getConfig } = require('./ipc-handlers');
+  const cfg = getConfig();
+
+  // Route to correct provider based on model prefix
+  const model = cfg.model;
+  if (model.startsWith('claude-')) {
+    return createAnthropicProvider({
+      apiKey: config.anthropic.apiKey || process.env.ANTHROPIC_API_KEY || '',
+      model: model,
+    });
   }
-  return currentProvider;
+
+  return createOpenAIProvider({
+    baseUrl: config.deepseek.baseUrl,
+    apiKey: config.deepseek.apiKey,
+    model: model,
+  });
 }
 
 function getOrCreateTools(): ToolRegistry {
@@ -76,8 +91,6 @@ app.whenReady().then(() => {
   setupIpcHandlers(
     getOrCreateProvider,
     getOrCreateTools,
-    () => config.agent.maxTurns,
-    () => config.systemPrompt,
   );
   createWindow();
 

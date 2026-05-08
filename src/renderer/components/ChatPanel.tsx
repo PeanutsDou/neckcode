@@ -4,8 +4,56 @@ import { ChatInput } from './ChatInput';
 import { MessageBubble } from './MessageBubble';
 
 export function ChatPanel() {
-  const { entries, streamingText, isStreaming, error } = useChatStore();
+  const { entries, streamingText, isStreaming, error,
+          addEntry, appendDelta, finishStream, setStreaming, setError } = useChatStore();
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Set up IPC event listeners
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api) return;
+
+    const unsubs: Array<() => void> = [];
+
+    unsubs.push(api.onDelta((text) => appendDelta(text)));
+    unsubs.push(api.onToolStart((data: any) => {
+      addEntry({
+        id: Date.now().toString(),
+        role: 'tool',
+        content: `Calling ${data.name}...`,
+        toolName: data.name,
+        toolArgs: data.argumentsText,
+        timestamp: Date.now(),
+      });
+    }));
+    unsubs.push(api.onToolResult((data: any) => {
+      addEntry({
+        id: Date.now().toString(),
+        role: 'tool',
+        content: data.result,
+        toolName: data.name,
+        toolResult: data.result,
+        timestamp: Date.now(),
+      });
+    }));
+    unsubs.push(api.onTurnDone((data: any) => {
+      finishStream(data.text);
+      // Auto-save
+      const state = useChatStore.getState();
+      if (state.entries.length > 0) {
+        const sid = (window as any).__currentSessionId || Date.now().toString();
+        (window as any).__currentSessionId = sid;
+        const title = state.entries.find(e => e.role === 'user')?.content.slice(0, 50) || 'Untitled';
+        api.saveSession({
+          id: sid, title, projectPath: '', modelId: '',
+          messages: state.entries, createdAt: Date.now(), updatedAt: Date.now(),
+        }).catch(() => {});
+      }
+    }));
+    unsubs.push(api.onError((msg) => setError(msg)));
+
+    return () => { unsubs.forEach(fn => fn()); };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
