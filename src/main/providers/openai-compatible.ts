@@ -41,31 +41,47 @@ function toApiMessages(messages: Message[]): unknown[] {
       };
     }
 
-    // Handle images: build content array for user messages with attachments
-    if (msg.role === 'user' && Array.isArray(msg.attachments) && msg.attachments.length > 0) {
-      const content: Record<string, unknown>[] = [
-        { type: 'text', text: msg.content },
-      ];
-      for (const att of msg.attachments) {
-        if (att.type === 'image') {
-          content.push({
-            type: 'image_url',
-            image_url: { url: att.data, detail: 'auto' },
-          });
-        }
-      }
-      return { role: 'user', content };
-    }
-
     return { role: msg.role, content: msg.content };
   });
 }
 
 export function createOpenAIProvider(config: OpenAIConfig): Provider {
+  // Detect if current model supports vision
+  const VISION_PATTERNS = ['gpt-4', 'vision', 'vl', 'gemini', 'qwen'];
+  const supportsVision = VISION_PATTERNS.some(k => (config.model || '').toLowerCase().includes(k));
+
   return {
     async runStep({ messages, tools, model, onDelta, signal }) {
       const actualModel = model === 'default' ? config.model : model;
-      const apiMessages = toApiMessages(messages);
+
+      // Handle images for messages
+      const processed = messages.map(msg => {
+        if (msg.role === 'user' && msg.attachments?.length) {
+          if (supportsVision) {
+            const content: Record<string, unknown>[] = [
+              { type: 'text', text: msg.content },
+            ];
+            for (const att of msg.attachments) {
+              if (att.type === 'image') {
+                content.push({
+                  type: 'image_url',
+                  image_url: { url: att.data, detail: 'auto' },
+                });
+              }
+            }
+            return { role: 'user', content };
+          }
+          // Non-vision model: describe images in text
+          const note = msg.attachments
+            .filter(a => a.type === 'image')
+            .map((_, i) => `[Image ${i + 1} attached — current model does not support vision]`)
+            .join('\n');
+          return { role: 'user', content: msg.content ? `${msg.content}\n${note}` : note };
+        }
+        return msg;
+      });
+
+      const apiMessages = toApiMessages(processed as Message[]);
 
       const response = await fetch(`${config.baseUrl}/chat/completions`, {
         method: 'POST',
