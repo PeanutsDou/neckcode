@@ -7,6 +7,9 @@ const api = {
   sendMessage: (sessionId: string, text: string, attachments?: { type: string; data: string; mimeType: string }[]) => {
     return ipcRenderer.invoke('agent:send-message', sessionId, text, attachments || []);
   },
+  regenerate: (sessionId: string, text: string, attachments?: { type: string; data: string; mimeType: string }[]) => {
+    return ipcRenderer.invoke('agent:regenerate', sessionId, text, attachments || []);
+  },
   abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
   resetAgent: (sessionId: string) => ipcRenderer.invoke('agent:reset', sessionId),
   setAgentContext: (sessionId: string, messages: unknown[]) => ipcRenderer.invoke('agent:set-context', sessionId, messages),
@@ -16,6 +19,11 @@ const api = {
     const listener = (_event: unknown, sid: string, text: string) => cb(sid, text);
     ipcRenderer.on('agent:delta', listener);
     return () => { ipcRenderer.removeListener('agent:delta', listener); };
+  },
+  onThinkingDelta: (cb: (sid: string, text: string) => void) => {
+    const listener = (_event: unknown, sid: string, text: string) => cb(sid, text);
+    ipcRenderer.on('agent:thinking-delta', listener);
+    return () => { ipcRenderer.removeListener('agent:thinking-delta', listener); };
   },
   onToolStart: (cb: (sid: string, data: unknown) => void) => {
     const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);

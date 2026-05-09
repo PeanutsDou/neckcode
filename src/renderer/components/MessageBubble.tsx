@@ -27,22 +27,24 @@ export function MessageBubble({ entry }: Props) {
     const sid = state.activeId || 'default';
     const allEntries = state.sessions[sid]?.entries || [];
     const myIdx = allEntries.findIndex(e => e.id === entry.id);
+    if (myIdx < 0) return;
     let userMsg = '';
+    let userAttachments: { type: string; data: string; mimeType: string }[] | undefined;
     for (let i = myIdx - 1; i >= 0; i--) {
       if (allEntries[i].role === 'user') {
         userMsg = allEntries[i].content;
+        userAttachments = allEntries[i].attachments?.map(a => ({
+          type: a.type,
+          data: a.data,
+          mimeType: a.type === 'image' ? 'image/png' : 'text/plain',
+        }));
         break;
       }
     }
     if (userMsg && window.electronAPI) {
-      useChatStore.getState().addEntryTo(sid, {
-        id: `user_${Date.now()}`,
-        role: 'user',
-        content: userMsg,
-        timestamp: Date.now(),
-      });
-      useChatStore.getState().setStreamingTo(sid, true);
-      window.electronAPI.sendMessage(sid, userMsg);
+      state.trimEntriesFrom(sid, myIdx);
+      state.setStreamingTo(sid, true);
+      window.electronAPI.regenerate(sid, userMsg, userAttachments);
     }
   }, [entry.id]);
 

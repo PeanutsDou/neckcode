@@ -1,6 +1,7 @@
 export const IPC = {
   // Agent -> UI (main to renderer)
   AGENT_DELTA: 'agent:delta',
+  AGENT_THINKING_DELTA: 'agent:thinking-delta',
   AGENT_TOOL_START: 'agent:tool-start',
   AGENT_TOOL_RESULT: 'agent:tool-result',
   AGENT_TURN_DONE: 'agent:turn-done',
@@ -8,6 +9,7 @@ export const IPC = {
 
   // UI -> Agent (renderer to main, invoke)
   AGENT_SEND_MESSAGE: 'agent:send-message',
+  AGENT_REGENERATE: 'agent:regenerate',
   AGENT_ABORT: 'agent:abort',
 
   // Session

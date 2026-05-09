@@ -89,28 +89,14 @@ export function setupIpcHandlers(
   }
 
   // ---- Agent ----
-  ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
-    const p = getProvider();
-    if (!p) throw new Error('No provider configured');
 
-    // Abort previous run for THIS session only
-    const prevAbort = sessionAbortControllers.get(sessionId);
-    if (prevAbort) prevAbort.abort();
-    const abortCtrl = new AbortController();
-    sessionAbortControllers.set(sessionId, abortCtrl);
-
-    // Per-session agent
-    let sessionAgent = sessionAgents.get(sessionId);
-    if (!sessionAgent) {
-      const cfg = getConfig();
-      const fullPrompt = agentMdContent
-        ? `${cfg.systemPrompt}\n\n${agentMdContent}`
-        : cfg.systemPrompt;
-      sessionAgent = new AgentRuntime(p, getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
-      sessionAgents.set(sessionId, sessionAgent);
-    }
-
-    // Buffer delta text to reduce IPC overhead — flush every 30ms
+  async function runAgentTurnWithStreaming(
+    sessionId: string,
+    sessionAgent: AgentRuntime,
+    message: string,
+    attachments: { type: string; data: string; mimeType: string }[],
+    abortCtrl: AbortController,
+  ) {
     let deltaBuffer = '';
     let flushTimer: ReturnType<typeof setInterval> | null = null;
     const flushDelta = () => {
@@ -123,13 +109,14 @@ export function setupIpcHandlers(
     try {
       const result = await sessionAgent.runUserTurn(
         message,
-        (attachments || []) as { type: 'image'; data: string; mimeType: string }[],
+        attachments as { type: 'image'; data: string; mimeType: string }[],
         {
           onDelta(text) {
-            if (!flushTimer) {
-              flushTimer = setInterval(flushDelta, 30);
-            }
+            if (!flushTimer) flushTimer = setInterval(flushDelta, 30);
             deltaBuffer += text;
+          },
+          onReasoning(text) {
+            getWindow()?.webContents.send('agent:thinking-delta', sessionId, text);
           },
           onToolStart(toolCall) {
             getWindow()?.webContents.send('agent:tool-start', sessionId, toolCall);
@@ -161,6 +148,44 @@ export function setupIpcHandlers(
       }
       return null;
     }
+  }
+
+  function getOrCreateSessionAgent(sessionId: string): AgentRuntime {
+    let sessionAgent = sessionAgents.get(sessionId);
+    if (!sessionAgent) {
+      const cfg = getConfig();
+      const fullPrompt = agentMdContent
+        ? `${cfg.systemPrompt}\n\n${agentMdContent}`
+        : cfg.systemPrompt;
+      sessionAgent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
+      sessionAgents.set(sessionId, sessionAgent);
+    }
+    return sessionAgent;
+  }
+
+  function abortPreviousRun(sessionId: string): AbortController {
+    const prevAbort = sessionAbortControllers.get(sessionId);
+    if (prevAbort) prevAbort.abort();
+    const abortCtrl = new AbortController();
+    sessionAbortControllers.set(sessionId, abortCtrl);
+    return abortCtrl;
+  }
+
+  ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
+    const p = getProvider();
+    if (!p) throw new Error('No provider configured');
+    const abortCtrl = abortPreviousRun(sessionId);
+    const sessionAgent = getOrCreateSessionAgent(sessionId);
+    return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
+  });
+
+  ipcMain.handle('agent:regenerate', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
+    const p = getProvider();
+    if (!p) throw new Error('No provider configured');
+    const abortCtrl = abortPreviousRun(sessionId);
+    const sessionAgent = getOrCreateSessionAgent(sessionId);
+    sessionAgent.removeLastUserTurn();
+    return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
   });
 
   ipcMain.handle('agent:abort', (_event, sessionId: string) => {

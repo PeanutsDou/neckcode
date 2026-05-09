@@ -8,6 +8,7 @@ import {
   useActiveIsStreaming,
   useActiveRunStartedAt,
   useActiveError,
+  useActiveThinkingText,
   type ChatEntry,
 } from '../stores/chat-store';
 import { ChatInput } from './ChatInput';
@@ -35,7 +36,7 @@ function estimateTokens(text: string): number {
   return Math.round(cjk * 0.7 + ascii * 0.25);
 }
 
-function estimateCurrentRunTokens(entries: ChatEntry[], streamingText: string): number {
+function estimateCurrentRunTokens(entries: ChatEntry[], streamingText: string, thinkingText: string): number {
   let start = -1;
   for (let i = entries.length - 1; i >= 0; i--) {
     if (entries[i].role === 'user') {
@@ -63,6 +64,7 @@ function estimateCurrentRunTokens(entries: ChatEntry[], streamingText: string): 
   }
 
   text += streamingText;
+  text += thinkingText;
   return estimateTokens(text);
 }
 
@@ -82,11 +84,31 @@ export function ChatPanel() {
   const store = useChatStore;
   const entries = useActiveEntries();
   const streamingText = useActiveStreamingText();
+  const thinkingText = useActiveThinkingText();
   const isStreaming = useActiveIsStreaming();
   const runStartedAt = useActiveRunStartedAt();
   const error = useActiveError();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const wasStreaming = useRef(false);
+  const userScrolledUp = useRef(false);
   const [elapsed, setElapsed] = useState(0);
+
+  // Detect user manually scrolling away from the bottom
+  useEffect(() => {
+    const container = bottomRef.current?.parentElement;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        userScrolledUp.current = true;
+      } else if (e.deltaY > 0) {
+        const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
+        if (dist < 5) userScrolledUp.current = false;
+      }
+    };
+    container.addEventListener('wheel', handleWheel, { passive: true });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, []);
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -96,6 +118,9 @@ export function ChatPanel() {
 
     unsubs.push(api.onDelta((sid, text) => {
       store.getState().appendDeltaTo(sid, text);
+    }));
+    unsubs.push(api.onThinkingDelta((sid, text) => {
+      store.getState().appendThinkingDeltaTo(sid, text);
     }));
     unsubs.push(api.onToolStart((sid, data: any) => {
       store.getState().addEntryTo(sid, {
@@ -143,18 +168,27 @@ export function ChatPanel() {
     return () => clearInterval(timer);
   }, [isStreaming, runStartedAt]);
 
-  const tokens = isStreaming ? estimateCurrentRunTokens(entries, streamingText) : 0;
-  const streamMetric = `${fmtTime(elapsed)} · ↓ ${fmtTokens(tokens)} tokens`;
+  const tokens = isStreaming ? estimateCurrentRunTokens(entries, streamingText, thinkingText) : 0;
+  const isThinking = isStreaming && thinkingText.length > 0 && streamingText.length === 0;
+  const thinkingLabel = isThinking ? ' 正在思考' : '';
+  const streamMetric = `${fmtTime(elapsed)} · ↓ ${fmtTokens(tokens)} tokens${thinkingLabel}`;
 
   useEffect(() => {
     const container = bottomRef.current?.parentElement;
     if (!container) return;
-    // Only auto-scroll if user is near the bottom
-    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
-    if (isNearBottom || !isStreaming) {
-      bottomRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+    // Always scroll when a new run starts (user just sent a message)
+    const runJustStarted = isStreaming && !wasStreaming.current;
+    wasStreaming.current = isStreaming;
+    if (runJustStarted) {
+      userScrolledUp.current = false;
+      bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+      return;
     }
-  }, [entries, streamingText, isStreaming]);
+    // During streaming: only auto-scroll if user hasn't manually scrolled up
+    if (isStreaming && userScrolledUp.current) return;
+    // When stream finishes or user is following: scroll to bottom
+    bottomRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+  }, [entries, streamingText, thinkingText, isStreaming]);
 
   return (
     <div className="chat-panel">

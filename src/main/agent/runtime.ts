@@ -22,6 +22,7 @@ export interface Provider {
     tools: ToolDefinition[];
     model: string;
     onDelta?: (text: string) => void;
+    onReasoning?: (text: string) => void;
     signal?: AbortSignal;
   }): Promise<RunStepResult>;
 }
@@ -55,6 +56,10 @@ export class AgentRuntime {
     this.session.clear();
   }
 
+  removeLastUserTurn(): void {
+    this.session.removeLastUserTurn();
+  }
+
   async runUserTurn(userMessage: string, attachments: Attachment[], callbacks: AgentCallbacks, signal?: AbortSignal): Promise<RunStepResult> {
     const checkpoint = this.session.createCheckpoint();
     this.session.addUserMessage(userMessage, attachments);
@@ -78,6 +83,7 @@ export class AgentRuntime {
           tools: this.tools.getDefinitions(),
           model: 'default', // Will be overridden by the actual model in provider
           onDelta: callbacks.onDelta,
+          onReasoning: callbacks.onReasoning,
           signal,
         });
 

@@ -15,6 +15,7 @@ export interface SessionState {
   entries: ChatEntry[];
   isStreaming: boolean;
   streamingText: string;
+  thinkingText: string;
   error: string | null;
   pendingContext: string | null;
   runStartedAt: number | null;
@@ -37,9 +38,11 @@ interface ChatState {
 
   addEntryTo: (sid: string, entry: ChatEntry) => void;
   appendDeltaTo: (sid: string, text: string) => void;
+  appendThinkingDeltaTo: (sid: string, text: string) => void;
   finishStreamTo: (sid: string, text: string) => void;
   setStreamingTo: (sid: string, v: boolean) => void;
   setErrorTo: (sid: string, msg: string | null) => void;
+  trimEntriesFrom: (sid: string, fromIndex: number) => void;
 
   ensureActiveSession: () => string;
   startNew: () => void;
@@ -50,7 +53,7 @@ interface ChatState {
 }
 
 function emptySession(): SessionState {
-  return { entries: [], isStreaming: false, streamingText: '', error: null, pendingContext: null, runStartedAt: null };
+  return { entries: [], isStreaming: false, streamingText: '', thinkingText: '', error: null, pendingContext: null, runStartedAt: null };
 }
 
 function updateSession(
@@ -139,6 +142,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...s,
         entries: newEntries,
         streamingText: '',
+        thinkingText: '',
         isStreaming: false,
         runStartedAt: null,
       }));
@@ -152,6 +156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ...ses,
       isStreaming: v,
       streamingText: v ? '' : ses.streamingText,
+      thinkingText: v ? '' : ses.thinkingText,
       error: v ? null : ses.error,
       runStartedAt: v ? (ses.runStartedAt || Date.now()) : null,
     })));
@@ -179,6 +184,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     )));
   },
 
+  appendThinkingDeltaTo(sid, text) {
+    set(state => updateSession(state, sid, ses => (
+      ses.isStreaming ? { ...ses, thinkingText: ses.thinkingText + text } : ses
+    )));
+  },
+
   finishStreamTo(sid, text) {
     set(state => {
       const ses = state.sessions[sid] || emptySession();
@@ -188,6 +199,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...s,
         entries: newEntries,
         streamingText: '',
+        thinkingText: '',
         isStreaming: false,
         error: null,
         runStartedAt: null,
@@ -201,6 +213,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ...ses,
       isStreaming: v,
       streamingText: v ? '' : ses.streamingText,
+      thinkingText: v ? '' : ses.thinkingText,
       error: v ? null : ses.error,
       runStartedAt: v ? (ses.runStartedAt || Date.now()) : null,
     })));
@@ -208,6 +221,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setErrorTo(sid, msg) {
     set(state => updateSession(state, sid, ses => ({ ...ses, error: msg, isStreaming: false, runStartedAt: null })));
+  },
+
+  trimEntriesFrom(sid, fromIndex) {
+    set(state => updateSession(state, sid, ses => {
+      if (fromIndex < 0 || fromIndex >= ses.entries.length) return ses;
+      return { ...ses, entries: ses.entries.slice(0, fromIndex) };
+    }));
   },
 
   ensureActiveSession() {
@@ -321,6 +341,15 @@ export function useActiveError(): string | null {
     if (!id) return null;
     const ses = s.sessions[id];
     return ses ? ses.error : null;
+  });
+}
+
+export function useActiveThinkingText(): string {
+  return useChatStore(s => {
+    const id = s.activeId;
+    if (!id) return '';
+    const ses = s.sessions[id];
+    return ses ? ses.thinkingText : '';
   });
 }
 

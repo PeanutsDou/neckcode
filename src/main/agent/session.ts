@@ -71,6 +71,21 @@ export class ChatSession {
     return this.messages.length;
   }
 
+  /** Remove the last user message and everything after it (assistant + tool messages) */
+  removeLastUserTurn(): void {
+    let lastUserIdx = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].role === 'user') {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx >= 0) {
+      this.messages = this.messages.slice(0, lastUserIdx);
+    }
+    this.checkpoints = [];
+  }
+
   /** Estimate total tokens (chars / 4) */
   estimateTokens(): number {
     let chars = 0;

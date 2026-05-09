@@ -52,7 +52,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
   const supportsVision = VISION_PATTERNS.some(k => (config.model || '').toLowerCase().includes(k));
 
   return {
-    async runStep({ messages, tools, model, onDelta, signal }) {
+    async runStep({ messages, tools, model, onDelta, onReasoning, signal }) {
       const actualModel = model === 'default' ? config.model : model;
 
       // Handle images for messages
@@ -175,6 +175,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           const rc = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '';
           if (rc) {
             reasoningContent += rc;
+            onReasoning?.(rc);
           }
 
           const toolCallsDelta = delta.tool_calls as Array<Record<string, unknown>> | undefined;

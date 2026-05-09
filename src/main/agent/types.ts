@@ -37,6 +37,7 @@ export interface RunStepResult {
 
 export interface AgentCallbacks {
   onDelta?: (text: string) => void;
+  onReasoning?: (text: string) => void;
   onToolStart?: (toolCall: ToolCall) => void;
   onToolResult?: (toolCall: ToolCall, result: string) => void;
   onComplete?: (result: RunStepResult) => void;

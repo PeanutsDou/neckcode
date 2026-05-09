@@ -84,7 +84,7 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
   const client = new Anthropic({ apiKey: config.apiKey });
 
   return {
-    async runStep({ messages, tools, model, onDelta, signal }) {
+    async runStep({ messages, tools, model, onDelta, onReasoning, signal }) {
       const actualModel = model === 'default' ? config.model : model;
 
       // Extract system prompt
@@ -126,6 +126,7 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
       // Handle thinking/reasoning
       stream.on('thinking', (chunk) => {
         reasoningContent += chunk;
+        onReasoning?.(chunk);
       });
 
       try {
