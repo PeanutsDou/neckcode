@@ -77,19 +77,29 @@ const api = {
   listSkills: () => ipcRenderer.invoke('skills:list'),
   invokeSkill: (name: string) => ipcRenderer.invoke('skills:invoke', name),
   writeSkillContent: (name: string, content: string) => ipcRenderer.invoke('skills:write-content', name, content),
+  deleteSkill: (name: string) => ipcRenderer.invoke('skills:delete', name),
   getAgentMd: () => ipcRenderer.invoke('agent-md:get'),
   listMemory: () => ipcRenderer.invoke('memory:list'),
   readMemory: (path: string) => ipcRenderer.invoke('memory:read', path),
   writeMemory: (path: string, content: string) => ipcRenderer.invoke('memory:write', path, content),
+  deleteMemory: (path: string) => ipcRenderer.invoke('memory:delete', path),
 
   // Ask user question
-  onAskShow: (cb: (askId: string, questions: unknown[]) => void) => {
-    const listener = (_: unknown, askId: string, questions: unknown[]) => cb(askId, questions);
+  onAskShow: (cb: (sessionId: string, askId: string, questions: unknown[]) => void) => {
+    const listener = (_: unknown, sessionId: string, askId: string, questions: unknown[]) => cb(sessionId, askId, questions);
     ipcRenderer.on('ask:show', listener);
     return () => { ipcRenderer.removeListener('ask:show', listener); };
   },
   respondToAsk: (askId: string, answers: Record<string, string> | null) => {
     return ipcRenderer.invoke('ask:respond', askId, answers);
+  },
+  onConfirmShow: (cb: (sessionId: string, confirmId: string, message: string) => void) => {
+    const listener = (_: unknown, sessionId: string, confirmId: string, message: string) => cb(sessionId, confirmId, message);
+    ipcRenderer.on('confirm:show', listener);
+    return () => { ipcRenderer.removeListener('confirm:show', listener); };
+  },
+  respondToConfirm: (confirmId: string, approved: boolean) => {
+    return ipcRenderer.invoke('confirm:respond', confirmId, approved);
   },
 
   // Permissions

@@ -147,7 +147,13 @@ export function ChatPanel() {
   const streamMetric = `${fmtTime(elapsed)} · ↓ ${fmtTokens(tokens)} tokens`;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+    const container = bottomRef.current?.parentElement;
+    if (!container) return;
+    // Only auto-scroll if user is near the bottom
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    if (isNearBottom || !isStreaming) {
+      bottomRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+    }
   }, [entries, streamingText, isStreaming]);
 
   return (

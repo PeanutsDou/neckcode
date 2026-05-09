@@ -11,7 +11,8 @@ import type { ToolRegistry } from './agent/runtime';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
-let toolRegistry: ToolRegistry | null = null;
+const toolRegistries = new Map<string, ToolRegistry>();
+let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null;
 
 function createProvider(): Provider {
   const cfg = getConfig();
@@ -34,23 +35,22 @@ function createProvider(): Provider {
   });
 }
 
-function getOrCreateTools(): ToolRegistry {
-  if (!toolRegistry) {
-    const { dialog, BrowserWindow } = require('electron');
-    const { getPermissionMode } = require('./ipc-handlers');
-    toolRegistry = createToolRegistry(
+function getOrCreateTools(sessionId = 'default'): ToolRegistry {
+  let registry = toolRegistries.get(sessionId);
+  if (!registry) {
+    const { BrowserWindow } = require('electron');
+    const { getPermissionMode, pendingConfirms } = require('./ipc-handlers');
+    registry = createToolRegistry(
       getConfig().agent.workspaceRoot,
       async (message: string) => {
         if (!mainWindow) return false;
-        const result = await dialog.showMessageBox(mainWindow, {
-          type: 'warning',
-          title: 'Confirm',
-          message,
-          buttons: ['Cancel', 'Proceed'],
-          defaultId: 0,
-          cancelId: 0,
+        return new Promise((resolve, reject) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          if (!win) { reject(new Error('No window')); return; }
+          const confirmId = `confirm_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          pendingConfirms.set(confirmId, { sessionId, resolve, reject });
+          win.webContents.send('confirm:show', sessionId, confirmId, message);
         });
-        return result.response === 1;
       },
       async (questions) => {
         return new Promise((resolve, reject) => {
@@ -61,22 +61,32 @@ function getOrCreateTools(): ToolRegistry {
           const askId = `ask_${Date.now()}_${Math.random().toString(36).slice(2)}`;
           // Register the pending promise via a module-level store
           const { pendingAsks } = require('./ipc-handlers');
-          pendingAsks.set(askId, { resolve, reject });
-          win.webContents.send('ask:show', askId, questions);
+          pendingAsks.set(askId, { sessionId, resolve, reject });
+          win.webContents.send('ask:show', sessionId, askId, questions);
         });
       },
       () => getPermissionMode(),
     );
+    toolRegistries.set(sessionId, registry);
   }
-  return toolRegistry;
+  return registry;
 }
 
 function saveWindowBounds(): void {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   const bounds = mainWindow.getBounds();
   const cfg = getConfig();
   cfg.window = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
   saveConfig().catch(() => {});
+}
+
+function scheduleSaveWindowBounds(): void {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMaximized()) return;
+  if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
+  saveBoundsTimer = setTimeout(() => {
+    saveBoundsTimer = null;
+    saveWindowBounds();
+  }, 300);
 }
 
 function createWindow(): void {
@@ -97,6 +107,9 @@ function createWindow(): void {
     title: 'DeepSeek Code',
     icon: iconPath,
     frame: false,
+    transparent: false,
+    hasShadow: true,
+    thickFrame: true,
     backgroundColor: '#f6f3ee',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -113,20 +126,26 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  // Save window bounds on move/resize
-  mainWindow.on('resize', () => saveWindowBounds());
-  mainWindow.on('move', () => saveWindowBounds());
+  // Persist bounds after resizing/moving settles. Writing config on every native
+  // resize frame can make Windows compositor repaint behind the renderer.
+  mainWindow.on('resize', scheduleSaveWindowBounds);
+  mainWindow.on('move', scheduleSaveWindowBounds);
 
   // Minimize to tray instead of closing
   mainWindow.on('close', (event) => {
     if (tray && !(app as any).__quitting) {
       event.preventDefault();
       mainWindow?.hide();
+      return;
     }
+    saveWindowBounds();
   });
 
   mainWindow.on('closed', () => {
-    saveWindowBounds();
+    if (saveBoundsTimer) {
+      clearTimeout(saveBoundsTimer);
+      saveBoundsTimer = null;
+    }
     mainWindow = null;
   });
 }
@@ -152,6 +171,8 @@ function createTray(): void {
       click: () => {
         (app as any).__quitting = true;
         saveWindowBounds();
+        tray?.destroy();
+        tray = null;
         app.quit();
       },
     },

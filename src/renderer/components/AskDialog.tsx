@@ -8,25 +8,43 @@ interface Question {
 }
 
 interface AskState {
+  sessionId: string;
   askId: string;
   questions: Question[];
 }
 
+interface ConfirmState {
+  sessionId: string;
+  confirmId: string;
+  message: string;
+}
+
 export function AskDialog() {
-  const [ask, setAsk] = useState<AskState | null>(null);
+  const [askQueue, setAskQueue] = useState<AskState[]>([]);
+  const [confirmQueue, setConfirmQueue] = useState<ConfirmState[]>([]);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const ask = askQueue[0] || null;
+  const confirm = !ask ? confirmQueue[0] || null : null;
 
   useEffect(() => {
     const api = window.electronAPI;
-    if (!api?.onAskShow) return;
-    const unsub = api.onAskShow((askId, questions) => {
-      setAsk({ askId, questions: questions as Question[] });
-      setAnswers({});
+    const unsubAsk = api?.onAskShow?.((sessionId, askId, questions) => {
+      setAskQueue(prev => [...prev, { sessionId, askId, questions: questions as Question[] }]);
     });
-    return () => { unsub(); };
+    const unsubConfirm = api?.onConfirmShow?.((sessionId, confirmId, message) => {
+      setConfirmQueue(prev => [...prev, { sessionId, confirmId, message }]);
+    });
+    return () => {
+      unsubAsk?.();
+      unsubConfirm?.();
+    };
   }, []);
 
-  if (!ask) return null;
+  useEffect(() => {
+    setAnswers({});
+  }, [ask?.askId]);
+
+  if (!ask && !confirm) return null;
 
   const handleSelect = (questionIdx: number, optionLabel: string, multi: boolean) => {
     setAnswers(prev => {
@@ -54,44 +72,74 @@ export function AskDialog() {
       }
     });
     window.electronAPI?.respondToAsk?.(ask.askId, flat);
-    setAsk(null);
+    setAskQueue(prev => prev.slice(1));
   };
 
   const handleCancel = () => {
-    window.electronAPI?.respondToAsk?.(ask.askId, null);
-    setAsk(null);
+    if (ask) {
+      window.electronAPI?.respondToAsk?.(ask.askId, null);
+      setAskQueue(prev => prev.slice(1));
+      return;
+    }
+    if (confirm) {
+      window.electronAPI?.respondToConfirm?.(confirm.confirmId, false);
+      setConfirmQueue(prev => prev.slice(1));
+    }
+  };
+
+  const handleConfirm = () => {
+    if (!confirm) return;
+    window.electronAPI?.respondToConfirm?.(confirm.confirmId, true);
+    setConfirmQueue(prev => prev.slice(1));
   };
 
   return (
     <div className="settings-overlay" onClick={handleCancel}>
-      <div className="ask-dialog" onClick={e => e.stopPropagation()}>
-        {ask.questions.map((q, qi) => (
-          <div key={qi} className="ask-question">
-            <div className="ask-question-header">{q.header}</div>
-            <div className="ask-question-text">{q.question}</div>
-            <div className="ask-options">
-              {q.options.map((opt, oi) => {
-                const selected = (answers[String(qi)] || []).includes(opt.label);
-                return (
-                  <label
-                    key={oi}
-                    className={`ask-option ${selected ? 'selected' : ''}`}
-                    onClick={() => handleSelect(qi, opt.label, q.multiSelect || false)}
-                  >
-                    <span className="ask-option-label">{opt.label}</span>
-                    {opt.description && (
-                      <span className="ask-option-desc">{opt.description}</span>
-                    )}
-                  </label>
-                );
-              })}
+      {ask && (
+        <div className="ask-dialog" onClick={e => e.stopPropagation()}>
+          {ask.questions.map((q, qi) => (
+            <div key={qi} className="ask-question">
+              <div className="ask-question-header">{q.header || '需要选择'} · {ask.sessionId.slice(0, 8)}</div>
+              <div className="ask-question-text">{q.question}</div>
+              <div className="ask-options">
+                {q.options.map((opt, oi) => {
+                  const selected = (answers[String(qi)] || []).includes(opt.label);
+                  return (
+                    <button
+                      key={oi}
+                      type="button"
+                      className={`ask-option ${selected ? 'selected' : ''}`}
+                      onClick={() => handleSelect(qi, opt.label, q.multiSelect || false)}
+                    >
+                      <span className="ask-option-label">{opt.label}</span>
+                      {opt.description && (
+                        <span className="ask-option-desc">{opt.description}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
+          ))}
+          <div className="settings-footer">
+            <button className="btn" onClick={handleCancel}>取消</button>
+            <button className="btn btn-send" onClick={handleSubmit}>确认</button>
           </div>
-        ))}
-        <div className="settings-footer">
-          <button className="btn btn-send" onClick={handleSubmit}>Submit</button>
         </div>
-      </div>
+      )}
+      {confirm && (
+        <div className="ask-dialog confirm-dialog" onClick={e => e.stopPropagation()}>
+          <div className="ask-question">
+            <div className="ask-question-header">需要确认 · {confirm.sessionId.slice(0, 8)}</div>
+            <div className="ask-question-text">Agent 请求执行以下操作</div>
+            <pre className="confirm-message">{confirm.message}</pre>
+          </div>
+          <div className="settings-footer">
+            <button className="btn" onClick={handleCancel}>取消</button>
+            <button className="btn btn-send" onClick={handleConfirm}>允许</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

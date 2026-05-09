@@ -25,6 +25,7 @@ export type SessionStatus = 'idle' | 'running' | 'error';
 interface ChatState {
   activeId: string | null;
   sessions: Record<string, SessionState>;
+  focusVersion: number;
 
   addEntry: (entry: ChatEntry) => void;
   appendDelta: (text: string) => void;
@@ -32,6 +33,7 @@ interface ChatState {
   setStreaming: (v: boolean) => void;
   setError: (msg: string | null) => void;
   setPendingContext: (text: string | null) => void;
+  triggerFocus: () => void;
 
   addEntryTo: (sid: string, entry: ChatEntry) => void;
   appendDeltaTo: (sid: string, text: string) => void;
@@ -112,6 +114,7 @@ async function autoSave(sessionId: string, entries: ChatEntry[]) {
 export const useChatStore = create<ChatState>((set, get) => ({
   activeId: null,
   sessions: {},
+  focusVersion: 0,
 
   addEntry(entry) {
     set(state => updateSession(state, state.activeId || 'default', ses => ({
@@ -140,6 +143,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         runStartedAt: null,
       }));
     });
+    // Auto-focus input after response
+    set(s => ({ focusVersion: s.focusVersion + 1 }));
   },
 
   setStreaming(v) {
@@ -158,6 +163,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setPendingContext(text) {
     set(state => updateSession(state, state.activeId || 'default', ses => ({ ...ses, pendingContext: text })));
+  },
+
+  triggerFocus() {
+    set(s => ({ focusVersion: s.focusVersion + 1 }));
   },
 
   addEntryTo(sid, entry) {
@@ -184,6 +193,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         runStartedAt: null,
       }));
     });
+    set(s => ({ focusVersion: s.focusVersion + 1 }));
   },
 
   setStreamingTo(sid, v) {

@@ -1,5 +1,5 @@
 import { promises as fs, existsSync, statSync } from 'fs';
-import { dirname, resolve, join, relative, extname } from 'path';
+import { dirname, resolve, join, relative, extname, isAbsolute } from 'path';
 import { exec as execCb, execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import type { ToolDefinition, ToolCall } from '../agent/types';
@@ -13,11 +13,11 @@ import { skillHandlers } from './skill-tools';
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
 
-function ensurePath(workspaceRoot: string, inputPath?: string): string {
+function ensurePath(workspaceRoot: string, inputPath?: string, allowOutsideWorkspace = false): string {
   const p = typeof inputPath === 'string' && inputPath.trim() ? inputPath.trim() : '.';
-  const resolved = resolve(workspaceRoot, p);
+  const resolved = allowOutsideWorkspace && isAbsolute(p) ? resolve(p) : resolve(workspaceRoot, p);
   const normalizedRoot = resolve(workspaceRoot);
-  if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + '\\') && !resolved.startsWith(normalizedRoot + '/')) {
+  if (!allowOutsideWorkspace && resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + '\\') && !resolved.startsWith(normalizedRoot + '/')) {
     throw new Error(`Path escapes workspace root: ${p}`);
   }
   return resolved;
@@ -33,12 +33,43 @@ function safeJson(input: string): Record<string, unknown> {
   return JSON.parse(input);
 }
 
+function describeToolAction(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === 'run_shell') {
+    return `运行命令：${String(args.command || '').slice(0, 500)}`;
+  }
+  if (toolName === 'delete_file') {
+    return `删除文件：${String(args.path || '')}`;
+  }
+  if (toolName === 'write_file') {
+    return `写入文件：${String(args.path || '')}`;
+  }
+  if (toolName === 'edit_file') {
+    return `编辑文件：${String(args.path || '')}`;
+  }
+  if (toolName === 'notebook_edit') {
+    return `编辑 Notebook：${String(args.path || args.notebookPath || '')}`;
+  }
+  return `执行工具：${toolName}`;
+}
+
+function commandEscapesWorkspace(command: string, workspaceRoot: string): boolean {
+  const normalizedRoot = resolve(workspaceRoot).toLowerCase();
+  if (/(^|[\s"'`])\.\.(\\|\/)/.test(command)) return true;
+
+  const absolutePathPattern = /[a-zA-Z]:[\\/][^\s"'`|<>]+|\\\\[^\s"'`|<>]+/g;
+  const matches = command.match(absolutePathPattern) || [];
+  return matches.some(match => {
+    const resolved = resolve(match).toLowerCase();
+    return resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + '\\') && !resolved.startsWith(normalizedRoot + '/');
+  });
+}
+
 const DEFINITIONS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read a UTF-8 text file from the workspace.',
+      description: 'Read a UTF-8 text file. Default permission restricts paths to the workspace; full access allows absolute local paths.',
       parameters: {
         type: 'object',
         properties: {
@@ -53,7 +84,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Write a UTF-8 text file inside the workspace. Creates parent directories if needed.',
+      description: 'Write a UTF-8 text file. Default permission restricts paths to the workspace and asks for confirmation; full access allows absolute local paths without confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -69,7 +100,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'list_dir',
-      description: 'List files and folders inside the workspace directory.',
+      description: 'List files and folders. Default permission restricts paths to the workspace; full access allows absolute local paths.',
       parameters: {
         type: 'object',
         properties: {
@@ -83,7 +114,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'delete_file',
-      description: 'Delete a file inside the workspace.',
+      description: 'Delete a file. Default permission restricts paths to the workspace and asks for confirmation; full access allows absolute local paths without confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -98,7 +129,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'run_shell',
-      description: 'Run a shell command inside the workspace root.',
+      description: 'Run a shell command. Default permission asks for confirmation and runs from the workspace root; full access runs without confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -318,8 +349,7 @@ const DEFINITIONS: ToolDefinition[] = [
 
 import type { PermissionMode } from '../../shared/permissions';
 
-const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell']);
-const DANGER_PATTERNS = /rm\s+-rf|del\s+\/f|format\s|mkfs|dd\s+if|git\s+push\s+--force|git\s+reset\s+--hard|shutdown|restart/i;
+const CONFIRM_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'notebook_edit']);
 
 export function createToolRegistry(
   workspaceRoot: string,
@@ -329,26 +359,22 @@ export function createToolRegistry(
 ): ToolRegistry {
   const needsConfirm = (toolName: string, args: Record<string, unknown>): boolean => {
     const mode = getPermissionMode?.() || 'default';
-    if (mode === 'bypass') return false;
-    if (mode === 'plan') return true; // All writes are blocked
-    if (toolName === 'delete_file') return true;
-    if (mode === 'acceptEdits' && (toolName === 'write_file' || toolName === 'edit_file')) return false;
-    if (toolName === 'run_shell') {
-      const cmd = String(args.command || '').toLowerCase();
-      return DANGER_PATTERNS.test(cmd);
-    }
-    return false;
+    void args;
+    return mode === 'default' && CONFIRM_TOOLS.has(toolName);
   };
+
+  const canAccessAllPaths = () => (getPermissionMode?.() || 'default') === 'fullAccess';
+  const resolveToolPath = (inputPath?: string) => ensurePath(workspaceRoot, inputPath, canAccessAllPaths());
 
   const handlers: Record<string, (args: Record<string, unknown>) => Promise<string>> = {
     async read_file(args) {
-      const p = ensurePath(workspaceRoot, args.path as string);
+      const p = resolveToolPath(args.path as string);
       const content = await fs.readFile(p, 'utf8');
       return truncate(content);
     },
 
     async write_file(args) {
-      const p = ensurePath(workspaceRoot, args.path as string);
+      const p = resolveToolPath(args.path as string);
       await fs.mkdir(dirname(p), { recursive: true });
       const content = String(args.content);
       await fs.writeFile(p, content, 'utf8');
@@ -356,7 +382,7 @@ export function createToolRegistry(
     },
 
     async list_dir(args) {
-      const p = ensurePath(workspaceRoot, args.path as string);
+      const p = resolveToolPath(args.path as string);
       const entries = await fs.readdir(p, { withFileTypes: true });
       const lines = entries
         .sort((a, b) => a.name.localeCompare(b.name))
@@ -365,7 +391,7 @@ export function createToolRegistry(
     },
 
     async delete_file(args) {
-      const p = ensurePath(workspaceRoot, args.path as string);
+      const p = resolveToolPath(args.path as string);
       await fs.unlink(p);
       return `Deleted ${p}`;
     },
@@ -399,7 +425,7 @@ export function createToolRegistry(
     },
 
     async edit_file(args) {
-      const p = ensurePath(workspaceRoot, args.path as string);
+      const p = resolveToolPath(args.path as string);
       const oldStr = String(args.old_string);
       const newStr = String(args.new_string);
 
@@ -533,7 +559,7 @@ export function createToolRegistry(
       const pattern = String(args.pattern);
       const searchPath = typeof args.path === 'string' ? args.path : '.';
       const include = typeof args.include === 'string' ? args.include : null;
-      const p = ensurePath(workspaceRoot, searchPath);
+      const p = resolveToolPath(searchPath);
 
       let regex: RegExp;
       try {
@@ -691,17 +717,13 @@ export function createToolRegistry(
         const args = safeJson(toolCall.argumentsText);
         const mode = getPermissionMode?.() || 'default';
 
-        // Plan mode: block all write tools
-        if (mode === 'plan' && WRITE_TOOLS.has(toolCall.name)) {
-          return `[Plan mode] Blocked tool "${toolCall.name}". Only read operations are allowed in plan mode.`;
+        if (mode === 'default' && toolCall.name === 'run_shell' && commandEscapesWorkspace(String(args.command || ''), workspaceRoot)) {
+          return 'ERROR: 默认权限下命令只能在工作区内工作。切换到“完全访问”后才能引用工作区外路径。';
         }
 
-        // Check for dangerous operations
         if (confirmHandler && needsConfirm(toolCall.name, args)) {
-          const desc = toolCall.name === 'delete_file'
-            ? `Delete file: ${args.path}`
-            : `Run shell command: ${String(args.command).slice(0, 200)}`;
-          const approved = await confirmHandler(`Dangerous operation:\n\n${desc}\n\nProceed?`);
+          const desc = describeToolAction(toolCall.name, args);
+          const approved = await confirmHandler(desc);
           if (!approved) {
             return `Operation cancelled by user: ${desc}`;
           }

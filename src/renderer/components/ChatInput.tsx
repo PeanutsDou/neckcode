@@ -34,9 +34,14 @@ export function ChatInput() {
   const [showCommands, setShowCommands] = useState(false);
   const [commandIdx, setCommandIdx] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { addEntryTo, setStreamingTo, clearActive, setPendingContext } = useChatStore();
+  const { addEntryTo, setStreamingTo, clearActive, setPendingContext, focusVersion } = useChatStore();
   const isStreaming = useActiveIsStreaming();
   const pendingContext = useActivePendingContext();
+
+  // Auto-focus after response completes
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [focusVersion]);
   const { setModel, availableModels, currentModel } = useAppStore();
   const [skillCommands, setSkillCommands] = useState<SlashCommand[]>([]);
 

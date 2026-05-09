@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { encrypt, decrypt } from './config/secrets';
+import type { PermissionMode } from '../shared/permissions';
 
 export interface ProviderConfig {
   id: string;
@@ -21,6 +22,8 @@ export interface AppConfigData {
     workspaceRoot: string;
   };
   systemPrompt: string;
+  permissionMode: PermissionMode;
+  fontScale?: number;
   window?: {
     x?: number;
     y?: number;
@@ -60,9 +63,14 @@ const defaultConfig: AppConfigData = {
     workspaceRoot: process.cwd(),
   },
   systemPrompt: 'You are a helpful coding assistant. Use tools when needed. Be concise and factual.',
+  permissionMode: 'default',
 };
 
 let config: AppConfigData = { ...defaultConfig };
+
+function normalizePermissionMode(value: unknown): PermissionMode {
+  return value === 'fullAccess' ? 'fullAccess' : 'default';
+}
 
 export function getConfig(): AppConfigData {
   return config;
@@ -121,6 +129,7 @@ export async function loadConfig(): Promise<AppConfigData> {
     const data = await fs.readFile(CONFIG_FILE, 'utf8');
     const raw = JSON.parse(data) as Record<string, unknown>;
     config = migrateLegacy(raw);
+    config.permissionMode = normalizePermissionMode(config.permissionMode);
     // Decrypt API keys
     for (const p of config.providers) {
       if (p.apiKey) p.apiKey = await decrypt(p.apiKey);

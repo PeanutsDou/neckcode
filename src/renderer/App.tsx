@@ -37,7 +37,9 @@ function handleMinimize() {
 }
 
 function handleMaximize() {
-  window.electronAPI?.maximize?.();
+  if (window.electronAPI?.maximize) {
+    window.electronAPI.maximize();
+  }
 }
 
 function handleClose() {
@@ -49,17 +51,59 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const toolbarRef = React.useRef<HTMLDivElement>(null);
+
+  // Double-click entire toolbar area to maximize
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const handler = () => {
+      if (window.electronAPI?.maximize) window.electronAPI.maximize();
+    };
+    el.addEventListener('dblclick', handler);
+    return () => el.removeEventListener('dblclick', handler);
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  // Font scale via CSS variable
+  const fontScale = useAppStore(s => s.fontScale);
+  const setFontScale = useAppStore(s => s.setFontScale);
+  useEffect(() => {
+    document.documentElement.style.setProperty('--font-scale', `${fontScale / 100}`);
+  }, [fontScale]);
+
+  // Load fontScale from config
+  useEffect(() => {
+    window.electronAPI?.getConfig().then((c: any) => {
+      if (c.fontScale) useAppStore.getState().setFontScale(c.fontScale);
+    }).catch(() => {});
+  }, []);
+
+  // Ctrl+Scroll to zoom
+  useEffect(() => {
+    const handler = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -5 : 5;
+        const newScale = useAppStore.getState().fontScale + delta;
+        useAppStore.getState().setFontScale(newScale);
+        window.electronAPI?.setConfig('fontScale', newScale).catch(() => {});
+      }
+    };
+    document.addEventListener('wheel', handler, { passive: false });
+    return () => document.removeEventListener('wheel', handler);
+  }, []);
+
   return (
     <ErrorBoundary>
       <div className="app-container">
         {/* Title bar */}
-        <div className="toolbar">
+        <div className="toolbar" ref={toolbarRef}>
           <div className="toolbar-left">
+            <img src="./icon.png" className="toolbar-icon" alt="" />
             <span className="toolbar-title">DeepSeek Code</span>
           </div>
           <div className="toolbar-center" />

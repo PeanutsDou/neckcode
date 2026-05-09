@@ -23,16 +23,17 @@ interface SessionData {
 let agentMdContent = '';
 let agentMdFiles: string[] = [];
 
-// Pending ask-user-question promises, keyed by a unique ID
-export const pendingAsks = new Map<string, { resolve: (answers: Record<string, string>) => void; reject: (err: Error) => void }>();
-let askIdCounter = 0;
+// Pending UI promises, keyed by unique IDs and tied to the originating session.
+export const pendingAsks = new Map<string, { sessionId: string; resolve: (answers: Record<string, string>) => void; reject: (err: Error) => void }>();
+export const pendingConfirms = new Map<string, { sessionId: string; resolve: (approved: boolean) => void; reject: (err: Error) => void }>();
 
 const sessionAgents = new Map<string, AgentRuntime>();
 const sessionAbortControllers = new Map<string, AbortController>();
 
-let currentPermissionMode: PermissionMode = 'default';
+let currentPermissionMode: PermissionMode = getConfig().permissionMode || 'default';
 
 export function getPermissionMode(): PermissionMode {
+  currentPermissionMode = getConfig().permissionMode || currentPermissionMode || 'default';
   return currentPermissionMode;
 }
 
@@ -60,16 +61,31 @@ function ensurePath(workspaceRoot: string, inputPath: string): string {
 
 export function setupIpcHandlers(
   getProvider: () => Provider,
-  getTools: () => ToolRegistry,
+  getTools: (sessionId?: string) => ToolRegistry,
 ) {
-  function createSessionAgent(messages?: Message[]): AgentRuntime {
+  function createSessionAgent(sessionId: string, messages?: Message[]): AgentRuntime {
     const cfg = getConfig();
     const fullPrompt = agentMdContent
       ? `${cfg.systemPrompt}\n\n${agentMdContent}`
       : cfg.systemPrompt;
-    const agent = new AgentRuntime(getProvider(), getTools(), cfg.agent.maxTurns, fullPrompt);
+    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
     if (messages?.length) agent.loadMessages(messages);
     return agent;
+  }
+
+  function cancelPendingInteractionsForSession(sessionId: string, reason: string): void {
+    for (const [askId, pending] of pendingAsks) {
+      if (pending.sessionId === sessionId) {
+        pendingAsks.delete(askId);
+        pending.reject(new Error(reason));
+      }
+    }
+    for (const [confirmId, pending] of pendingConfirms) {
+      if (pending.sessionId === sessionId) {
+        pendingConfirms.delete(confirmId);
+        pending.resolve(false);
+      }
+    }
   }
 
   // ---- Agent ----
@@ -90,7 +106,7 @@ export function setupIpcHandlers(
       const fullPrompt = agentMdContent
         ? `${cfg.systemPrompt}\n\n${agentMdContent}`
         : cfg.systemPrompt;
-      sessionAgent = new AgentRuntime(p, getTools(), cfg.agent.maxTurns, fullPrompt);
+      sessionAgent = new AgentRuntime(p, getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
       sessionAgents.set(sessionId, sessionAgent);
     }
 
@@ -150,11 +166,13 @@ export function setupIpcHandlers(
   ipcMain.handle('agent:abort', (_event, sessionId: string) => {
     sessionAbortControllers.get(sessionId)?.abort();
     sessionAbortControllers.delete(sessionId);
+    cancelPendingInteractionsForSession(sessionId, 'Session aborted');
   });
 
   ipcMain.handle('agent:reset', (_event, sessionId: string) => {
     sessionAgents.delete(sessionId);
     sessionAbortControllers.delete(sessionId);
+    cancelPendingInteractionsForSession(sessionId, 'Session reset');
   });
 
   ipcMain.handle('agent:set-context', async (_event, sessionId: string, messages: Array<{ role: string; content: string }>) => {
@@ -164,7 +182,7 @@ export function setupIpcHandlers(
     const fullPrompt = agentMdContent
       ? `${cfg.systemPrompt}\n\n${agentMdContent}`
       : cfg.systemPrompt;
-    const agent = new AgentRuntime(p, getTools(), cfg.agent.maxTurns, fullPrompt);
+    const agent = new AgentRuntime(p, getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
     agent.loadMessages(messages as any);
     sessionAgents.set(sessionId, agent);
   });
@@ -179,6 +197,14 @@ export function setupIpcHandlers(
       } else {
         pending.reject(new Error('User cancelled'));
       }
+    }
+  });
+
+  ipcMain.handle('confirm:respond', (_event, confirmId: string, approved: boolean) => {
+    const pending = pendingConfirms.get(confirmId);
+    if (pending) {
+      pendingConfirms.delete(confirmId);
+      pending.resolve(Boolean(approved));
     }
   });
 
@@ -223,6 +249,8 @@ export function setupIpcHandlers(
       maxTurns: cfg.agent.maxTurns,
       maxTokens: cfg.agent.maxTokens,
       contextLimit: cfg.agent.contextLimit,
+      permissionMode: cfg.permissionMode,
+      fontScale: cfg.fontScale || 100,
       baseUrl: active.baseUrl,
       deepseekApiKey: cfg.providers.find(p => p.id === 'deepseek')?.apiKey || '',
       anthropicApiKey: cfg.providers.find(p => p.id === 'anthropic')?.apiKey || '',
@@ -246,6 +274,7 @@ export function setupIpcHandlers(
     else if (key === 'maxTokens') cfg.agent.maxTokens = value as number;
     else if (key === 'contextLimit') cfg.agent.contextLimit = value as number;
     else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
+    else if (key === 'fontScale') { cfg.fontScale = value as number; await saveConfig(); return; }
     else if (key === 'deepseekApiKey') {
       const ds = cfg.providers.find(p => p.id === 'deepseek');
       if (ds) ds.apiKey = value as string;
@@ -290,12 +319,16 @@ export function setupIpcHandlers(
   });
 
   // Permission mode
-  ipcMain.handle('permission:get', () => currentPermissionMode);
-  ipcMain.handle('permission:set', (_event, mode: string) => {
-    const valid: string[] = ['default', 'acceptEdits', 'plan', 'bypass'];
+  ipcMain.handle('permission:get', () => getPermissionMode());
+  ipcMain.handle('permission:set', async (_event, mode: string) => {
+    const valid: string[] = ['default', 'fullAccess'];
     if (valid.includes(mode)) {
       currentPermissionMode = mode as PermissionMode;
+      const cfg = getConfig();
+      cfg.permissionMode = currentPermissionMode;
+      await saveConfig();
     }
+    return currentPermissionMode;
   });
 
   ipcMain.handle('config:delete-provider', async (_event, id: string) => {
@@ -339,6 +372,7 @@ export function setupIpcHandlers(
     sessionAbortControllers.get(id)?.abort();
     sessionAbortControllers.delete(id);
     sessionAgents.delete(id);
+    cancelPendingInteractionsForSession(id, 'Session deleted');
     try { await fs.unlink(join(sessionsDir(), `${id}.json`)); } catch { /* */ }
   });
 
@@ -413,6 +447,18 @@ export function setupIpcHandlers(
     return await fs.readFile(filePath, 'utf8');
   });
 
+  ipcMain.handle('memory:delete', async (_event, filePath: string) => {
+    // Prevent deleting AGENT.md
+    if (filePath.toLowerCase().endsWith('agent.md')) {
+      throw new Error('AGENT.md cannot be deleted');
+    }
+    try {
+      await fs.unlink(filePath);
+    } catch (err) {
+      throw new Error(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
   ipcMain.handle('memory:write', async (_event, filePath: string, content: string) => {
     await fs.writeFile(filePath, content, 'utf8');
   });
@@ -441,6 +487,16 @@ export function setupIpcHandlers(
     const skill = getSkill(skillName);
     if (!skill) return false;
     await fs.writeFile(join(skill.rootDir, 'SKILL.md'), content, 'utf8');
+    return true;
+  });
+
+  ipcMain.handle('skills:delete', async (_event, skillName: string) => {
+    await loadSkills(getConfig().agent.workspaceRoot);
+    const { getSkill } = require('./skills/loader');
+    const skill = getSkill(skillName);
+    if (!skill) throw new Error('Skill not found');
+    await fs.rm(skill.rootDir, { recursive: true });
+    await loadSkills(getConfig().agent.workspaceRoot);
     return true;
   });
 

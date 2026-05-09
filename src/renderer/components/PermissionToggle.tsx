@@ -18,11 +18,11 @@ export function PermissionToggle() {
     await window.electronAPI?.setPermissionMode(m);
   };
 
-  const label = PERMISSION_OPTIONS.find(o => o.value === mode)?.label || 'Default';
+  const label = PERMISSION_OPTIONS.find(o => o.value === mode)?.label || '默认权限';
 
   return (
     <div className="perm-toggle">
-      <button className="perm-toggle-btn" onClick={() => setOpen(!open)} title="Permission mode">
+      <button className="perm-toggle-btn" onClick={() => setOpen(!open)} title="权限模式">
         {label}
       </button>
       {open && (

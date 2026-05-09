@@ -17,6 +17,7 @@ export function MemoryDialog({ open, onClose }: Props) {
   const [content, setContent] = useState('');
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [size, setSize] = useState({ w: 700, h: 520 });
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const dragging = useRef(false);
@@ -69,6 +70,15 @@ export function MemoryDialog({ open, onClose }: Props) {
     } catch {
       setContent('(无法读取)');
     }
+  };
+
+  const handleDelete = async (file: MemoryFile) => {
+    try {
+      await (window.electronAPI as any).deleteMemory?.(file.path);
+      if (selected?.path === file.path) { setSelected(null); setContent(''); }
+      loadFiles();
+      setDeleteConfirm(null);
+    } catch { /* */ }
   };
 
   const handleSave = async () => {
@@ -138,6 +148,8 @@ export function MemoryDialog({ open, onClose }: Props) {
                 onClick={() => viewFile(f)}>
                 <span className="md-item-icon">M</span>
                 <span className="md-item-name">{f.name}</span>
+                <button className="md-item-del" onClick={e => { e.stopPropagation(); setDeleteConfirm(f.path); }}
+                  title="删除">×</button>
               </div>
             ))}
             {files.filter(f => f.type === 'memory').length === 0 && (
@@ -181,6 +193,23 @@ export function MemoryDialog({ open, onClose }: Props) {
 
         <div className="md-resize-handle" onMouseDown={onResizeStart} />
       </div>
+
+      {deleteConfirm && (
+        <div className="settings-overlay" style={{ zIndex: 1010 }} onClick={() => setDeleteConfirm(null)}>
+          <div className="settings-dialog" style={{ width: 360 }} onClick={e => e.stopPropagation()}>
+            <div className="settings-header"><h2>确认删除</h2></div>
+            <div className="settings-body">
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                确定删除这个记忆文件吗？此操作不可撤销。
+              </p>
+            </div>
+            <div className="settings-footer">
+              <button className="settings-btn-sm" onClick={() => setDeleteConfirm(null)}>取消</button>
+              <button className="btn btn-stop" onClick={() => handleDelete(files.find(f => f.path === deleteConfirm)!)}>删除</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

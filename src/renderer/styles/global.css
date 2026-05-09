@@ -19,11 +19,24 @@
   --warning: #b89a6e;
   --border: #c5bdb0;
   --radius: 8px;
+  --font-scale: 1;
   --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   --font-sans: 'Segoe UI', system-ui, sans-serif;
 }
 
-html, body, #root {
+html {
+  font-size: calc(14px * var(--font-scale));
+}
+
+.message-content {
+  font-size: calc(13.5px * var(--font-scale));
+}
+
+.chat-input {
+  font-size: calc(13px * var(--font-scale));
+}
+
+html, body {
   height: 100%;
   font-family: var(--font-sans);
   background: var(--bg-primary);
@@ -31,13 +44,20 @@ html, body, #root {
   overflow: hidden;
 }
 
-/* ===== Layout ===== */
+#root {
+  height: 100%;
+  overflow: hidden;
+}
 
 .app-container {
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
 }
+
+/* ===== Layout ===== */
 
 .toolbar {
   display: flex;
@@ -47,15 +67,29 @@ html, body, #root {
   padding: 0 12px;
   background: var(--bg-secondary);
   flex-shrink: 0;
-  -webkit-app-region: drag;
   user-select: none;
 }
 
-.toolbar-left, .toolbar-center, .toolbar-right {
+.toolbar-left, .toolbar-right {
   display: flex;
   align-items: center;
   gap: 6px;
-  -webkit-app-region: no-drag;
+}
+
+.toolbar-center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  height: 100%;
+  -webkit-app-region: drag;
+}
+
+.toolbar-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  object-fit: contain;
 }
 
 .toolbar-title {
@@ -434,6 +468,20 @@ html, body, #root {
 
 /* ===== Messages ===== */
 
+.msg-outer {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+}
+
+.msg-outer-user {
+  align-self: flex-end;
+}
+
+.msg-outer-assistant {
+  align-self: flex-start;
+}
+
 .message {
   display: flex;
   flex-direction: column;
@@ -442,7 +490,35 @@ html, body, #root {
   border-radius: var(--radius);
   line-height: 1.6;
   font-size: 13.5px;
-  max-width: 85%;
+  width: 100%;
+}
+
+.message-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 2px 0 0 14px;
+}
+
+.msg-outer:hover .message-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s;
+}
+
+.msg-action-btn:hover {
+  color: var(--accent);
 }
 
 .message-user {
@@ -1145,9 +1221,9 @@ html, body, #root {
   align-items: center;
   gap: 4px;
   padding: 1px 6px;
-  border: 1px solid rgba(197, 189, 176, 0.72);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(246, 243, 238, 0.55);
+  background: var(--bg-primary);
   color: var(--text-muted);
   line-height: 1.4;
   white-space: nowrap;
@@ -1161,7 +1237,7 @@ html, body, #root {
 }
 
 .session-status-running {
-  border-color: rgba(184, 154, 110, 0.55);
+  border-color: var(--warning);
   color: var(--warning);
 }
 
@@ -1170,7 +1246,7 @@ html, body, #root {
 }
 
 .session-status-error {
-  border-color: rgba(184, 112, 112, 0.55);
+  border-color: var(--error);
   color: var(--error);
 }
 
@@ -1179,7 +1255,7 @@ html, body, #root {
 }
 
 .session-status-idle .session-status-dot {
-  background: rgba(154, 148, 140, 0.6);
+  background: var(--text-muted);
 }
 
 .session-item-delete {
@@ -1531,6 +1607,23 @@ html, body, #root {
 }
 
 .md-item:hover { background: var(--bg-hover); }
+.md-item:hover .md-item-del { opacity: 1; }
+
+.md-item-del {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.md-item-del:hover { color: var(--error); }
+
 .md-item.selected {
   background: var(--bg-hover);
   border-left-color: var(--accent);
@@ -1791,6 +1884,10 @@ html, body, #root {
   flex-direction: column;
 }
 
+.confirm-dialog {
+  width: 500px;
+}
+
 .ask-question {
   padding: 16px 20px 12px;
 }
@@ -1822,11 +1919,15 @@ html, body, #root {
 .ask-option {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  text-align: left;
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.1s;
+  background: transparent;
+  font-family: var(--font-sans);
 }
 
 .ask-option:hover {
@@ -1848,6 +1949,22 @@ html, body, #root {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 2px;
+}
+
+.confirm-message {
+  margin-top: 10px;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ===== Terminal ===== */

@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatEntry } from '../stores/chat-store';
+import { useChatStore } from '../stores/chat-store';
 import { DiffPreview } from './DiffPreview';
 import { MermaidBlock } from './MermaidBlock';
 import { ToolCallCard } from './ToolCallCard';
@@ -11,6 +12,67 @@ interface Props {
 }
 
 export function MessageBubble({ entry }: Props) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(entry.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* */ }
+  }, [entry.content]);
+
+  const handleRegenerate = useCallback(() => {
+    const state = useChatStore.getState();
+    const sid = state.activeId || 'default';
+    const allEntries = state.sessions[sid]?.entries || [];
+    const myIdx = allEntries.findIndex(e => e.id === entry.id);
+    let userMsg = '';
+    for (let i = myIdx - 1; i >= 0; i--) {
+      if (allEntries[i].role === 'user') {
+        userMsg = allEntries[i].content;
+        break;
+      }
+    }
+    if (userMsg && window.electronAPI) {
+      useChatStore.getState().addEntryTo(sid, {
+        id: `user_${Date.now()}`,
+        role: 'user',
+        content: userMsg,
+        timestamp: Date.now(),
+      });
+      useChatStore.getState().setStreamingTo(sid, true);
+      window.electronAPI.sendMessage(sid, userMsg);
+    }
+  }, [entry.id]);
+
+  const actionButtons = (
+    <div className="message-actions">
+      <button className="msg-action-btn" onClick={handleCopy} title="复制">
+        {copied ? (
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3,8 6,11 13,4" />
+          </svg>
+        ) : (
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="5" y="5" width="9" height="10" rx="1.5" />
+            <path d="M2 11V3a1 1 0 011-1h7" />
+          </svg>
+        )}
+      </button>
+      {entry.role === 'assistant' && (
+        <button className="msg-action-btn" onClick={handleRegenerate} title="重新生成">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 8a6 6 0 0111.3-3.3" />
+            <polyline points="14,2 14,6 10,6" />
+            <path d="M14 8a6 6 0 01-11.3 3.3" />
+            <polyline points="2,14 2,10 6,10" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+
   if (entry.role === 'tool') {
     let diffData: { status: string; file: string; line: number; old: string; new: string } | null = null;
     if (entry.toolName === 'edit_file' && entry.toolResult) {
@@ -33,44 +95,45 @@ export function MessageBubble({ entry }: Props) {
   }
 
   return (
-    <div className={`message message-${entry.role}`}>
-      {entry.attachments && entry.attachments.length > 0 && (
-        <div className="message-attachments">
-          {entry.attachments.map((att, i) => (
-            <img key={i} src={att.data} alt={att.name} className="message-attachment-img" />
-          ))}
+    <div className={`msg-outer msg-outer-${entry.role}`}>
+      <div className={`message message-${entry.role}`}>
+        {entry.attachments && entry.attachments.length > 0 && (
+          <div className="message-attachments">
+            {entry.attachments.map((att, i) => (
+              <img key={i} src={att.data} alt={att.name} className="message-attachment-img" />
+            ))}
+          </div>
+        )}
+        <div className="message-content">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              code({ className, children, ...props }) {
+                const match = /language-(\w+)/.exec(className || '');
+                const lang = match?.[1];
+                const code = String(children).replace(/\n$/, '');
+
+                if (lang === 'mermaid') {
+                  return <MermaidBlock code={code} />;
+                }
+
+                if (className) {
+                  return (
+                    <pre><code className={className} {...props}>
+                      {children}
+                    </code></pre>
+                  );
+                }
+
+                return <code {...props}>{children}</code>;
+              },
+            }}
+          >
+            {entry.content}
+          </ReactMarkdown>
         </div>
-      )}
-      <div className="message-content">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            code({ className, children, ...props }) {
-              const match = /language-(\w+)/.exec(className || '');
-              const lang = match?.[1];
-              const code = String(children).replace(/\n$/, '');
-
-              if (lang === 'mermaid') {
-                return <MermaidBlock code={code} />;
-              }
-
-              // Regular code block
-              if (className) {
-                return (
-                  <pre><code className={className} {...props}>
-                    {children}
-                  </code></pre>
-                );
-              }
-
-              // Inline code
-              return <code {...props}>{children}</code>;
-            },
-          }}
-        >
-          {entry.content}
-        </ReactMarkdown>
       </div>
+      {actionButtons}
     </div>
   );
 }

@@ -19,6 +19,7 @@ export function SkillsDialog({ open, onClose }: Props) {
   const [content, setContent] = useState('');
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [size, setSize] = useState({ w: 700, h: 520 });
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const dragging = useRef(false);
@@ -54,6 +55,15 @@ export function SkillsDialog({ open, onClose }: Props) {
     } catch {
       setContent('(无法加载技能内容)');
     }
+  };
+
+  const handleDelete = async (name: string) => {
+    try {
+      await (window.electronAPI as any).deleteSkill?.(name);
+      if (selected?.name === name) { setSelected(null); setContent(''); }
+      loadSkills();
+      setDeleteConfirm(null);
+    } catch { /* */ }
   };
 
   const handleSave = async () => {
@@ -115,10 +125,12 @@ export function SkillsDialog({ open, onClose }: Props) {
                 className={`md-item ${selected?.name === s.name ? 'selected' : ''}`}
                 onClick={() => viewSkill(s)}>
                 <span className="md-item-icon" style={{ background: '#b89a6e' }}>S</span>
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}>{s.name}</div>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.description}</div>
                 </div>
+                <button className="md-item-del" onClick={e => { e.stopPropagation(); setDeleteConfirm(s.name); }}
+                  title="删除">×</button>
               </div>
             ))}
           </div>
@@ -159,6 +171,23 @@ export function SkillsDialog({ open, onClose }: Props) {
 
         <div className="md-resize-handle" onMouseDown={onResizeStart} />
       </div>
+
+      {deleteConfirm && (
+        <div className="settings-overlay" style={{ zIndex: 1010 }} onClick={() => setDeleteConfirm(null)}>
+          <div className="settings-dialog" style={{ width: 360 }} onClick={e => e.stopPropagation()}>
+            <div className="settings-header"><h2>确认删除</h2></div>
+            <div className="settings-body">
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                确定删除技能「{deleteConfirm}」吗？此操作不可撤销。
+              </p>
+            </div>
+            <div className="settings-footer">
+              <button className="settings-btn-sm" onClick={() => setDeleteConfirm(null)}>取消</button>
+              <button className="btn btn-stop" onClick={() => handleDelete(deleteConfirm)}>删除</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
