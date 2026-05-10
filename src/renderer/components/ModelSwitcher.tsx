@@ -5,10 +5,16 @@ export function ModelSwitcher() {
   const { currentModel, availableModels, setModel, setAvailableModels } = useAppStore();
 
   useEffect(() => {
-    window.electronAPI.getConfig().then(config => {
-      setModel(config.model);
-      setAvailableModels(config.models);
-    }).catch(() => {});
+    const load = () => {
+      window.electronAPI.getConfig().then(config => {
+        setModel(config.model);
+        setAvailableModels(config.models);
+      }).catch(() => {});
+    };
+    load();
+    const handler = () => load();
+    window.addEventListener('providers-changed', handler);
+    return () => window.removeEventListener('providers-changed', handler);
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {

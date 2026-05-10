@@ -4,9 +4,10 @@ interface Props {
   value: string;
   options: string[];
   onChange: (value: string) => void;
+  onOpen?: () => void | Promise<void>;
 }
 
-export function CustomSelect({ value, options, onChange }: Props) {
+export function CustomSelect({ value, options, onChange, onOpen }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -23,7 +24,17 @@ export function CustomSelect({ value, options, onChange }: Props) {
 
   return (
     <div className="custom-select" ref={ref}>
-      <button className="custom-select-trigger" onClick={() => setOpen(!open)}>
+      <button
+        className="custom-select-trigger"
+        onClick={async () => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          await onOpen?.();
+          setOpen(true);
+        }}
+      >
         <span>{value}</span>
         <svg width="8" height="5" viewBox="0 0 8 5" fill="none">
           <path d="M0 0l4 5 4-5z" fill="currentColor" />

@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import type { ChatEntry } from '../stores/chat-store';
 import { useChatStore } from '../stores/chat-store';
 import { DiffPreview } from './DiffPreview';
@@ -42,9 +43,14 @@ export function MessageBubble({ entry }: Props) {
       }
     }
     if (userMsg && window.electronAPI) {
+      const previousEntries = allEntries;
       state.trimEntriesFrom(sid, myIdx);
       state.setStreamingTo(sid, true);
-      window.electronAPI.regenerate(sid, userMsg, userAttachments);
+      void window.electronAPI.regenerate(sid, userMsg, userAttachments).catch(err => {
+        const next = useChatStore.getState();
+        next.loadEntries(sid, previousEntries);
+        next.setErrorTo(sid, err instanceof Error ? err.message : String(err));
+      });
     }
   }, [entry.id]);
 
@@ -108,7 +114,7 @@ export function MessageBubble({ entry }: Props) {
         )}
         <div className="message-content">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[remarkGfm, remarkBreaks]}
             components={{
               code({ className, children, ...props }) {
                 const match = /language-(\w+)/.exec(className || '');

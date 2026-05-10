@@ -4,12 +4,18 @@ import { homedir } from 'os';
 import { encrypt, decrypt } from './config/secrets';
 import type { PermissionMode } from '../shared/permissions';
 
+export interface ModelConfig {
+  name: string;
+  contextLimit?: number;
+  maxTokens?: number;
+}
+
 export interface ProviderConfig {
   id: string;
   name: string;
   baseUrl: string;
   apiKey: string;
-  models: string[];
+  models: ModelConfig[];
 }
 
 export interface AppConfigData {
@@ -18,13 +24,16 @@ export interface AppConfigData {
   activeModel: string;
   agent: {
     maxTurns: number;
-    maxTokens: number;
-    contextLimit: number;
+    maxTokens: number;       // fallback max output tokens
+    contextLimit: number;    // fallback context window
     workspaceRoot: string;
   };
   systemPrompt: string;
   permissionMode: PermissionMode;
+  theme?: 'light' | 'dark';
+  lightScheme?: string;
   fontScale?: number;
+  codeLeftWidth?: number;
   window?: {
     x?: number;
     y?: number;
@@ -42,14 +51,20 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com/v1',
     apiKey: '',
-    models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+    models: [
+      { name: 'deepseek-v4-pro', contextLimit: 1000000, maxTokens: 32768 },
+      { name: 'deepseek-v4-flash', contextLimit: 1000000, maxTokens: 16384 },
+    ],
   },
   {
     id: 'anthropic',
     name: 'Anthropic',
     baseUrl: 'https://api.anthropic.com/v1',
     apiKey: '',
-    models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+    models: [
+      { name: 'claude-sonnet-4-6', contextLimit: 200000, maxTokens: 32768 },
+      { name: 'claude-haiku-4-5', contextLimit: 200000, maxTokens: 16384 },
+    ],
   },
 ];
 
@@ -58,19 +73,39 @@ const defaultConfig: AppConfigData = {
   activeProvider: 'deepseek',
   activeModel: 'deepseek-v4-pro',
   agent: {
-    maxTurns: 8,
+    maxTurns: 100,
     maxTokens: 32768,
     contextLimit: 0,
     workspaceRoot: homedir(),
   },
   systemPrompt: 'You are a helpful coding assistant. Use tools when needed. Be concise and factual.',
   permissionMode: 'default',
+  theme: 'light',
+  lightScheme: 'default',
 };
 
 let config: AppConfigData = { ...defaultConfig };
 
 function normalizePermissionMode(value: unknown): PermissionMode {
   return value === 'fullAccess' ? 'fullAccess' : 'default';
+}
+
+function normalizeModels(raw: unknown): ModelConfig[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((m: unknown) => {
+      if (typeof m === 'string') return { name: m };
+      if (typeof m === 'object' && m !== null && typeof (m as Record<string, unknown>).name === 'string') {
+        const o = m as Record<string, unknown>;
+        return {
+          name: o.name as string,
+          contextLimit: typeof o.contextLimit === 'number' ? o.contextLimit : undefined,
+          maxTokens: typeof o.maxTokens === 'number' ? o.maxTokens : undefined,
+        };
+      }
+      return null;
+    })
+    .filter((m): m is ModelConfig => m !== null);
 }
 
 export function getConfig(): AppConfigData {
@@ -85,13 +120,37 @@ export function getConfigPath(): string {
   return CONFIG_FILE;
 }
 
+/** All model names across all providers (flat list for dropdown). */
+export function getAllModelNames(): string[] {
+  return config.providers.flatMap(p => p.models.map(m => m.name));
+}
+
+/** Look up per-model config. Falls back to agent-level defaults. */
+export function getModelConfig(modelName: string): ModelConfig | undefined {
+  for (const p of config.providers) {
+    const found = p.models.find(m => m.name === modelName);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+export function getActiveProvider(): ProviderConfig {
+  return config.providers.find(p => p.id === config.activeProvider) || config.providers[0];
+}
+
 function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
-  // Already migrated
   if (Array.isArray(raw.providers)) {
+    const providers = (raw.providers as Array<Record<string, unknown>>).map(p => ({
+      id: p.id as string,
+      name: p.name as string,
+      baseUrl: p.baseUrl as string,
+      apiKey: p.apiKey as string,
+      models: normalizeModels(p.models),
+    }));
     return {
       ...defaultConfig,
       ...raw,
-      providers: (raw.providers as ProviderConfig[]).map(p => ({ ...p })),
+      providers,
       agent: { ...defaultConfig.agent, ...(raw.agent as Record<string, unknown> || {}) },
     } as AppConfigData;
   }
@@ -105,12 +164,12 @@ function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
     const p = providers.find(x => x.id === 'deepseek')!;
     if (typeof ds.baseUrl === 'string') p.baseUrl = ds.baseUrl;
     if (typeof ds.apiKey === 'string') p.apiKey = ds.apiKey;
-    if (Array.isArray(ds.models)) p.models = ds.models as string[];
+    if (Array.isArray(ds.models)) p.models = normalizeModels(ds.models);
   }
   if (ant) {
     const p = providers.find(x => x.id === 'anthropic')!;
     if (typeof ant.apiKey === 'string') p.apiKey = ant.apiKey;
-    if (Array.isArray(ant.models)) p.models = ant.models as string[];
+    if (Array.isArray(ant.models)) p.models = normalizeModels(ant.models);
   }
 
   return {
@@ -131,7 +190,6 @@ export async function loadConfig(): Promise<AppConfigData> {
     const raw = JSON.parse(data) as Record<string, unknown>;
     config = migrateLegacy(raw);
     config.permissionMode = normalizePermissionMode(config.permissionMode);
-    // Decrypt API keys
     for (const p of config.providers) {
       if (p.apiKey) p.apiKey = await decrypt(p.apiKey);
     }
@@ -145,7 +203,6 @@ export async function loadConfig(): Promise<AppConfigData> {
 export async function saveConfig(): Promise<void> {
   try {
     await fs.mkdir(CONFIG_DIR, { recursive: true });
-    // Encrypt API keys before saving
     const toSave = { ...config, providers: await Promise.all(config.providers.map(async p => ({
       ...p,
       apiKey: p.apiKey ? await encrypt(p.apiKey) : '',
@@ -154,8 +211,4 @@ export async function saveConfig(): Promise<void> {
   } catch (err) {
     console.error('Failed to save config:', err);
   }
-}
-
-export function getActiveProvider(): ProviderConfig {
-  return config.providers.find(p => p.id === config.activeProvider) || config.providers[0];
 }

@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs';
-import { join, dirname } from 'path';
+import { join, resolve } from 'path';
 import { homedir } from 'os';
 
 export interface AgentMdResult {
@@ -28,16 +28,18 @@ export async function discoverAgentMd(startDir: string): Promise<AgentMdResult> 
     // No global AGENT.md
   }
 
-  // Project-level AGENT.md
+  // Project-level AGENT.md (skip if same as global)
   const projectPath = join(startDir, '.deepseekcode', 'AGENT.md');
-  try {
-    const projectContent = await fs.readFile(projectPath, 'utf8');
-    if (projectContent.trim()) {
-      files.push(projectPath);
-      contents.push(`# Project Instructions (${projectPath})\n${projectContent}`);
+  if (resolve(projectPath) !== resolve(globalPath)) {
+    try {
+      const projectContent = await fs.readFile(projectPath, 'utf8');
+      if (projectContent.trim()) {
+        files.push(projectPath);
+        contents.push(`# Project Instructions (${projectPath})\n${projectContent}`);
+      }
+    } catch {
+      // No project-level AGENT.md
     }
-  } catch {
-    // No project-level AGENT.md
   }
 
   return {

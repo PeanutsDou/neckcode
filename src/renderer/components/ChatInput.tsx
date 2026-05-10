@@ -42,8 +42,19 @@ export function ChatInput() {
   useEffect(() => {
     inputRef.current?.focus();
   }, [focusVersion]);
-  const { setModel, availableModels, currentModel } = useAppStore();
+  const { setModel, setAvailableModels, availableModels, currentModel } = useAppStore();
   const [skillCommands, setSkillCommands] = useState<SlashCommand[]>([]);
+
+  const refreshModels = useCallback(async () => {
+    try {
+      const cfg = await window.electronAPI?.getConfig();
+      if (!cfg) return;
+      setAvailableModels(cfg.models || []);
+      if (cfg.model) setModel(cfg.model);
+    } catch {
+      // Keep the current cached list if config refresh fails.
+    }
+  }, [setAvailableModels, setModel]);
 
   useEffect(() => {
     window.electronAPI?.listSkills().then(skills => {
@@ -143,7 +154,12 @@ export function ChatInput() {
   }, [setPendingContext]);
 
   const handleSend = async () => {
-    if (!canSend || isStreaming) return;
+    if (!canSend) return;
+    // If running, abort current task first, then send new message
+    if (isStreaming) {
+      const sid = getSessionId() || '';
+      await window.electronAPI.abort(sid);
+    }
     if (showCommands && filteredCommands.length > 0 && text.trim() === filteredCommands[commandIdx]?.name) {
       executeCommand(filteredCommands[commandIdx]);
       return;
@@ -225,7 +241,6 @@ export function ChatInput() {
         <textarea ref={inputRef} className="chat-input" value={text}
           onChange={handleChange} onKeyDown={handleKeyDown} onPaste={handlePaste}
           placeholder="输入消息，Enter 发送，/ 命令"
-          disabled={isStreaming}
           style={{ height: inputHeight }} />
 
         <div className="input-controls">
@@ -233,23 +248,23 @@ export function ChatInput() {
           <CustomSelect
             value={currentModel}
             options={availableModels}
-            onChange={setModel}
+            onOpen={refreshModels}
+            onChange={(m) => { setModel(m); window.electronAPI?.setConfig('model', m); }}
           />
 
-          {isStreaming ? (
+          {isStreaming && (
             <button className="send-btn sending" onClick={handleStop} title="停止">
               <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <rect x="2" y="2" width="8" height="8" rx="1.5" />
               </svg>
             </button>
-          ) : (
-            <button className="send-btn" onClick={handleSend} disabled={!canSend} title="发送">
-              <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="7" y1="11" x2="7" y2="3" />
-                <polyline points="4,6 7,3 10,6" />
-              </svg>
-            </button>
           )}
+          <button className="send-btn" onClick={handleSend} disabled={!canSend} title={isStreaming ? '发送补充消息（先中断当前任务）' : '发送'}>
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="7" y1="11" x2="7" y2="3" />
+              <polyline points="4,6 7,3 10,6" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>

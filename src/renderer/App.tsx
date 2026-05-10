@@ -9,8 +9,10 @@ import { ContextBar } from './components/ContextBar';
 import { AskDialog } from './components/AskDialog';
 import { SkillsDialog } from './components/SkillsDialog';
 import { MemoryDialog } from './components/MemoryDialog';
+import { WorkspaceBar } from './components/WorkspaceBar';
 import { ResizeHandle } from './components/ResizeHandle';
 import { useAppStore } from './stores/app-store';
+import { LIGHT_SCHEMES, normalizeLightScheme, type LightSchemeId } from './theme-schemes';
 
 class ErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -47,11 +49,21 @@ function handleClose() {
 }
 
 export default function App() {
-  const { showSidebar, toggleSidebar, showSessions, leftWidth, rightWidth, setLeftWidth, setRightWidth, theme, setTheme } = useAppStore();
+  const { showSidebar, toggleSidebar, showSessions, leftWidth, setLeftWidth, theme, setTheme, lightScheme, setLightScheme } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [codeLeftWidth, setCodeLeftWidth] = useState(() => 280);
+  const handleCodeResize = (delta: number) => {
+    setCodeLeftWidth(prev => {
+      const next = Math.max(180, Math.min(window.innerWidth * 0.5, prev + delta));
+      window.electronAPI?.setConfig('codeLeftWidth', next);
+      return next;
+    });
+  };
   const toolbarRef = React.useRef<HTMLDivElement>(null);
+  const appearanceRef = React.useRef<HTMLDivElement>(null);
 
   // Double-click entire toolbar area to maximize
   useEffect(() => {
@@ -66,7 +78,19 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
+    document.documentElement.setAttribute('data-light-scheme', lightScheme);
+  }, [theme, lightScheme]);
+
+  useEffect(() => {
+    if (!appearanceOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!appearanceRef.current?.contains(event.target as Node)) {
+        setAppearanceOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [appearanceOpen]);
 
   // Font scale via CSS variable
   const fontScale = useAppStore(s => s.fontScale);
@@ -75,11 +99,22 @@ export default function App() {
     document.documentElement.style.setProperty('--font-scale', `${fontScale / 100}`);
   }, [fontScale]);
 
-  // Load fontScale from config
+  // Load config-driven state
   useEffect(() => {
-    window.electronAPI?.getConfig().then((c: any) => {
-      if (c.fontScale) useAppStore.getState().setFontScale(c.fontScale);
-    }).catch(() => {});
+    const loadConfig = () => {
+      window.electronAPI?.getConfig().then((c: any) => {
+        useAppStore.getState().setTheme(c.theme || 'light');
+        useAppStore.getState().setLightScheme(normalizeLightScheme(c.lightScheme));
+        useAppStore.getState().setFontScale(c.fontScale || 100);
+        useAppStore.getState().setModel(c.model);
+        useAppStore.getState().setAvailableModels(c.models || []);
+        if (c.codeLeftWidth) setCodeLeftWidth(c.codeLeftWidth);
+      }).catch(() => {});
+    };
+    loadConfig();
+    const handler = () => loadConfig();
+    window.addEventListener('providers-changed', handler);
+    return () => window.removeEventListener('providers-changed', handler);
   }, []);
 
   // Ctrl+Scroll to zoom
@@ -96,6 +131,12 @@ export default function App() {
     document.addEventListener('wheel', handler, { passive: false });
     return () => document.removeEventListener('wheel', handler);
   }, []);
+
+  const applyLightScheme = (scheme: LightSchemeId) => {
+    setLightScheme(scheme);
+    window.electronAPI?.setConfig('lightScheme', scheme).catch(() => {});
+    setAppearanceOpen(false);
+  };
 
   return (
     <ErrorBoundary>
@@ -117,9 +158,43 @@ export default function App() {
             <button className="toolbar-btn" onClick={() => setSettingsOpen(true)}>
               设置
             </button>
+            <div className="appearance-menu-wrap" ref={appearanceRef}>
+              <button
+                className={`toolbar-btn ${appearanceOpen ? 'active' : ''}`}
+                onClick={() => setAppearanceOpen(v => !v)}
+              >
+                外观
+              </button>
+              {appearanceOpen && (
+                <div className="appearance-menu">
+                  <div className="appearance-menu-title">配色方案</div>
+                  {theme === 'dark' ? (
+                    <div className="appearance-menu-note">深色模式使用固定配色：夜蓝</div>
+                  ) : (
+                    <>
+                      {LIGHT_SCHEMES.map(scheme => (
+                        <button
+                          key={scheme.id}
+                          className={`appearance-option ${lightScheme === scheme.id ? 'active' : ''}`}
+                          type="button"
+                          onClick={() => applyLightScheme(scheme.id)}
+                        >
+                          <span className="appearance-swatch">
+                            {scheme.palette.slice(0, 3).map(color => (
+                              <i key={color} style={{ background: color }} />
+                            ))}
+                          </span>
+                          <span>{scheme.name}</span>
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
             <button
               className="toolbar-btn"
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              onClick={() => { const t = theme === 'dark' ? 'light' as const : 'dark' as const; setTheme(t); window.electronAPI?.setConfig('theme', t); }}
               title="切换主题"
             >
               {theme === 'dark' ? '☀' : '☾'}
@@ -142,38 +217,44 @@ export default function App() {
         </div>
 
         {/* Main content */}
-        <div className="main-content">
-          {showSessions && (
-            <>
-              <div className="sidebar-left" style={{ width: leftWidth }}>
-                <SessionList />
-                <div className="sidebar-left-bottom">
-                  <ContextBar />
-                </div>
+        {showSidebar ? (
+          <div className="code-panel-full">
+            <div className="code-panel-topbar">
+              <WorkspaceBar />
+              <button className="toolbar-btn code-panel-close" onClick={toggleSidebar} title="返回聊天">
+                <span style={{ fontSize: 18 }}>←</span>
+              </button>
+            </div>
+            <div className="code-panel-body">
+              <div className="code-panel-left" style={{ width: codeLeftWidth }}>
+                <FileTree />
               </div>
-              <ResizeHandle direction="left" onResize={setLeftWidth} />
-            </>
-          )}
-
-          <div className="chat-main">
-            <ChatPanel />
+              <ResizeHandle direction="left" onResize={handleCodeResize} />
+              <div className="code-panel-right">
+                <EditorTabs />
+                <EditorPanel />
+              </div>
+            </div>
           </div>
+        ) : (
+          <div className="main-content">
+            {showSessions && (
+              <>
+                <div className="sidebar-left" style={{ width: leftWidth }}>
+                  <SessionList />
+                  <div className="sidebar-left-bottom">
+                    <ContextBar />
+                  </div>
+                </div>
+                <ResizeHandle direction="left" onResize={setLeftWidth} />
+              </>
+            )}
 
-          {showSidebar && (
-            <>
-              <ResizeHandle direction="right" onResize={setRightWidth} />
-              <div className="sidebar-right" style={{ width: rightWidth, minWidth: 300, maxWidth: 800 }}>
-                <div className="sidebar-right-section">
-                  <FileTree />
-                </div>
-                <div className="sidebar-right-section editor-section">
-                  <EditorTabs />
-                  <EditorPanel />
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+            <div className="chat-main">
+              <ChatPanel />
+            </div>
+          </div>
+        )}
 
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <SkillsDialog open={skillsOpen} onClose={() => setSkillsOpen(false)} />

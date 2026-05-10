@@ -86,16 +86,37 @@ export class ChatSession {
     this.checkpoints = [];
   }
 
-  /** Estimate total tokens (chars / 4) */
+  /** Estimate total tokens with CJK-aware weighting */
   estimateTokens(): number {
-    let chars = 0;
+    let total = 0;
     for (const m of this.messages) {
-      chars += m.content.length;
+      total += this._tokenEstimate(m.content);
       if (m.toolCalls) {
-        for (const tc of m.toolCalls) chars += tc.argumentsText.length;
+        for (const tc of m.toolCalls) total += this._tokenEstimate(tc.argumentsText);
       }
     }
-    return Math.round(chars / 4);
+    return total;
+  }
+
+  private _tokenEstimate(text: string): number {
+    let cjk = 0;
+    let ascii = 0;
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      if (
+        (code >= 0x4E00 && code <= 0x9FFF) ||
+        (code >= 0x3400 && code <= 0x4DBF) ||
+        (code >= 0x3000 && code <= 0x303F) ||
+        (code >= 0xFF00 && code <= 0xFFEF) ||
+        (code >= 0xAC00 && code <= 0xD7AF) ||
+        code > 127
+      ) {
+        cjk++;
+      } else {
+        ascii++;
+      }
+    }
+    return Math.round(cjk * 0.7 + ascii * 0.25);
   }
 
   /** Compact: replace early messages with a system summary, keeping recent turn groups intact */

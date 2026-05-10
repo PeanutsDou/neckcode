@@ -110,6 +110,9 @@ const api = {
     return ipcRenderer.invoke('confirm:respond', confirmId, approved);
   },
 
+  // Dialog
+  pickDirectory: () => ipcRenderer.invoke('dialog:pick-dir'),
+
   // Permissions
   getPermissionMode: () => ipcRenderer.invoke('permission:get'),
   setPermissionMode: (mode: string) => ipcRenderer.invoke('permission:set', mode),

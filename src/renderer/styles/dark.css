@@ -1,15 +1,15 @@
 [data-theme="dark"] {
-  --bg-primary: #1a1a1a;
-  --bg-secondary: #242424;
-  --bg-surface: #2d2d2d;
-  --bg-hover: #3a3a3a;
-  --text-primary: #e0e0e0;
-  --text-secondary: #a0a0a0;
-  --text-muted: #707070;
-  --accent: #8a8a8a;
-  --accent-dim: #6a6a6a;
-  --error: #c87070;
-  --success: #7aaa7a;
-  --warning: #c0a060;
-  --border: #404040;
+  --bg-primary: #000f22;
+  --bg-secondary: #102842;
+  --bg-surface: #1b3554;
+  --bg-hover: #29496b;
+  --text-primary: #c0e6fd;
+  --text-secondary: #a6cce7;
+  --text-muted: #80aad3;
+  --accent: #80aad3;
+  --accent-dim: #5b86b6;
+  --error: #d88a8a;
+  --success: #8ec4aa;
+  --warning: #d1b978;
+  --border: #3f6593;
 }

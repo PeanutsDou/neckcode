@@ -51,6 +51,9 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
   const VISION_PATTERNS = ['gpt-4', 'vision', 'vl', 'gemini', 'qwen'];
   const supportsVision = VISION_PATTERNS.some(k => (config.model || '').toLowerCase().includes(k));
 
+  // Normalize base URL: strip trailing /chat/completions etc. if user accidentally pasted the full endpoint
+  const baseUrl = config.baseUrl.replace(/\/(chat\/completions|completions|v1)\/?$/, '');
+
   return {
     async runStep({ messages, tools, model, onDelta, onReasoning, signal }) {
       const actualModel = model === 'default' ? config.model : model;
@@ -84,7 +87,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
 
       const apiMessages = toApiMessages(processed as Message[]);
 
-      const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

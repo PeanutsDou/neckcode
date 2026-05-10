@@ -40,6 +40,7 @@ export class AgentRuntime {
     private tools: ToolRegistry,
     private maxTurns: number,
     systemPrompt?: string,
+    private contextLimit: number = 1_000_000,
   ) {
     this.session = new ChatSession(systemPrompt);
   }
@@ -64,11 +65,10 @@ export class AgentRuntime {
     const checkpoint = this.session.createCheckpoint();
     this.session.addUserMessage(userMessage, attachments);
 
-    // Auto-compact if exceeding 80% of context limit (1M for deepseek, 200K for claude)
+    // Auto-compact if exceeding 80% of context limit
     const estimatedTokens = this.session.estimateTokens();
-    const contextLimit = 1_000_000; // Conservative default
-    if (estimatedTokens > contextLimit * 0.8) {
-      this.session.compact(5); // Keep last 5 pairs
+    if (estimatedTokens > this.contextLimit * 0.8) {
+      this.session.compact(5); // Keep last 5 turns
       callbacks.onDelta?.('[Context compacted] ');
     }
 
@@ -123,7 +123,10 @@ export class AgentRuntime {
 
       throw new Error(`Agent stopped after ${this.maxTurns} turns`);
     } catch (error) {
-      this.session.restore(checkpoint);
+      if (!signal?.aborted) {
+        // Unexpected error: roll back this turn
+        this.session.restore(checkpoint);
+      }
       callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }

@@ -4,7 +4,7 @@ import { setupIpcHandlers } from './ipc-handlers';
 import { createOpenAIProvider } from './providers/openai-compatible';
 import { createAnthropicProvider } from './providers/anthropic';
 import { createToolRegistry } from './tools/registry';
-import { loadConfig, saveConfig, getConfig, getActiveProvider } from './config';
+import { loadConfig, saveConfig, getConfig, getActiveProvider, getModelConfig } from './config';
 import { loadSkills } from './skills/loader';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
@@ -19,11 +19,14 @@ function createProvider(): Provider {
   const active = getActiveProvider();
   const model = cfg.activeModel;
 
+  const modelCfg = getModelConfig(model);
+  const maxTokens = modelCfg?.maxTokens || cfg.agent.maxTokens;
+
   if (active.id === 'anthropic') {
     return createAnthropicProvider({
       apiKey: active.apiKey || process.env.ANTHROPIC_API_KEY || '',
       model,
-      maxTokens: cfg.agent.maxTokens,
+      maxTokens,
     });
   }
 
@@ -31,7 +34,7 @@ function createProvider(): Provider {
     baseUrl: active.baseUrl,
     apiKey: active.apiKey,
     model,
-    maxTokens: cfg.agent.maxTokens,
+    maxTokens,
   });
 }
 

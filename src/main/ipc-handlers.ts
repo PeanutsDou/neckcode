@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { promises as fs } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { homedir } from 'os';
@@ -6,20 +6,19 @@ import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import type { Message } from './agent/types';
-import { getConfig, setConfig, saveConfig, getActiveProvider } from './config';
+import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig } from './config';
 import type { AppConfigData, ProviderConfig } from './config';
 import type { PermissionMode } from '../shared/permissions';
 import { discoverAgentMd } from './agent-md';
 import { getLoadedSkills, loadSkills } from './skills/loader';
-interface SessionData {
-  id: string;
-  title?: string;
-  projectPath?: string;
-  modelId?: string;
-  messages?: unknown[];
-  createdAt?: number;
-  updatedAt?: number;
-}
+import {
+  deleteSession,
+  listSessions,
+  loadSession,
+  renameSession,
+  saveSession,
+  type SessionData,
+} from './session-store';
 
 let agentMdContent = '';
 let agentMdFiles: string[] = [];
@@ -38,12 +37,33 @@ export function getPermissionMode(): PermissionMode {
   return currentPermissionMode;
 }
 
-function sessionsDir(): string {
-  return join(homedir(), '.deepseekcode', 'sessions');
+function buildSkillsPrompt(): string {
+  const skills = getLoadedSkills();
+  const available = skills.filter(s => !s.disableModelInvocation && s.userInvocable !== false);
+  if (available.length === 0) return '';
+
+  const lines = ['## Available Skills'];
+  lines.push('');
+  lines.push('You have access to the following skills. When a user request matches a skill\'s trigger conditions, you MUST proactively invoke the relevant skill using the `invoke_skill` tool before responding. Use `list_skills` to see full skill details including when-to-use hints.');
+  lines.push('');
+  lines.push('**Skill storage**: All skills, memory, and config live under `~/.deepseekcode/`. When creating or editing skills, write to `~/.deepseekcode/skills/<name>/SKILL.md`. Do NOT use `~/.claude/` paths — that is a different application.');
+
+  for (const s of available) {
+    const trigger = s.whenToUse ? ` TRIGGER when: ${s.whenToUse}` : '';
+    const hint = s.argumentHint ? ` Args: ${s.argumentHint}` : '';
+    lines.push(`\n### ${s.name}\n${s.description}${trigger}${hint}`);
+  }
+
+  return lines.join('\n');
 }
 
-async function ensureSessionsDir(): Promise<void> {
-  await fs.mkdir(sessionsDir(), { recursive: true });
+function buildFullPrompt(): string {
+  const cfg = getConfig();
+  const parts = [cfg.systemPrompt];
+  if (agentMdContent) parts.push(agentMdContent);
+  const skillsPrompt = buildSkillsPrompt();
+  if (skillsPrompt) parts.push(skillsPrompt);
+  return parts.join('\n\n');
 }
 
 function getWindow() {
@@ -64,12 +84,15 @@ export function setupIpcHandlers(
   getProvider: () => Provider,
   getTools: (sessionId?: string) => ToolRegistry,
 ) {
+  function getActiveContextLimit(): number {
+    const cfg = getConfig();
+    const mc = getModelConfig(cfg.activeModel);
+    return mc?.contextLimit || cfg.agent.contextLimit || 128_000;
+  }
+
   function createSessionAgent(sessionId: string, messages?: Message[]): AgentRuntime {
     const cfg = getConfig();
-    const fullPrompt = agentMdContent
-      ? `${cfg.systemPrompt}\n\n${agentMdContent}`
-      : cfg.systemPrompt;
-    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
+    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
     if (messages?.length) agent.loadMessages(messages);
     return agent;
   }
@@ -144,7 +167,10 @@ export function setupIpcHandlers(
     } catch (err) {
       if (flushTimer) { clearInterval(flushTimer); flushDelta(); }
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg !== 'Aborted') {
+      const isAbort = msg === 'Aborted'
+        || (err instanceof Error && err.name === 'AbortError')
+        || (typeof DOMException !== 'undefined' && err instanceof DOMException);
+      if (!isAbort) {
         getWindow()?.webContents.send('agent:error', sessionId, msg);
       }
       return null;
@@ -152,16 +178,18 @@ export function setupIpcHandlers(
   }
 
   function getOrCreateSessionAgent(sessionId: string): AgentRuntime {
-    let sessionAgent = sessionAgents.get(sessionId);
-    if (!sessionAgent) {
-      const cfg = getConfig();
-      const fullPrompt = agentMdContent
-        ? `${cfg.systemPrompt}\n\n${agentMdContent}`
-        : cfg.systemPrompt;
-      sessionAgent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
-      sessionAgents.set(sessionId, sessionAgent);
+    const cfg = getConfig();
+    const existing = sessionAgents.get(sessionId);
+    if (existing) {
+      const messages = existing.getMessages();
+      const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
+      agent.loadMessages(messages);
+      sessionAgents.set(sessionId, agent);
+      return agent;
     }
-    return sessionAgent;
+    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
+    sessionAgents.set(sessionId, agent);
+    return agent;
   }
 
   function abortPreviousRun(sessionId: string): AbortController {
@@ -205,10 +233,7 @@ export function setupIpcHandlers(
     const p = getProvider();
     if (!p) throw new Error('No provider configured');
     const cfg = getConfig();
-    const fullPrompt = agentMdContent
-      ? `${cfg.systemPrompt}\n\n${agentMdContent}`
-      : cfg.systemPrompt;
-    const agent = new AgentRuntime(p, getTools(sessionId), cfg.agent.maxTurns, fullPrompt);
+    const agent = new AgentRuntime(p, getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
     agent.loadMessages(messages as any);
     sessionAgents.set(sessionId, agent);
   });
@@ -265,10 +290,16 @@ export function setupIpcHandlers(
   ipcMain.handle('config:get', () => {
     const cfg = getConfig();
     const active = getActiveProvider();
-    const allModels = cfg.providers.flatMap(p => p.models);
+    const modelContexts: Record<string, number> = {};
+    for (const p of cfg.providers) {
+      for (const m of p.models) {
+        if (m.contextLimit) modelContexts[m.name] = m.contextLimit;
+      }
+    }
     return {
       model: cfg.activeModel,
-      models: allModels,
+      models: getAllModelNames(),
+      modelContexts,
       providers: cfg.providers.map(p => ({ id: p.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, models: p.models })),
       activeProvider: cfg.activeProvider,
       workspaceRoot: cfg.agent.workspaceRoot,
@@ -276,7 +307,10 @@ export function setupIpcHandlers(
       maxTokens: cfg.agent.maxTokens,
       contextLimit: cfg.agent.contextLimit,
       permissionMode: cfg.permissionMode,
+      theme: cfg.theme || 'light',
+      lightScheme: cfg.lightScheme || 'default',
       fontScale: cfg.fontScale || 100,
+      codeLeftWidth: cfg.codeLeftWidth,
       baseUrl: active.baseUrl,
       deepseekApiKey: cfg.providers.find(p => p.id === 'deepseek')?.apiKey || '',
       anthropicApiKey: cfg.providers.find(p => p.id === 'anthropic')?.apiKey || '',
@@ -289,7 +323,7 @@ export function setupIpcHandlers(
       cfg.activeModel = value as string;
       // Auto-set activeProvider based on which provider has this model
       for (const p of cfg.providers) {
-        if (p.models.includes(cfg.activeModel)) {
+        if (p.models.some(m => m.name === cfg.activeModel)) {
           cfg.activeProvider = p.id;
           break;
         }
@@ -300,6 +334,10 @@ export function setupIpcHandlers(
     else if (key === 'maxTokens') cfg.agent.maxTokens = value as number;
     else if (key === 'contextLimit') cfg.agent.contextLimit = value as number;
     else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
+    else if (key === 'workspaceRoot') { cfg.agent.workspaceRoot = value as string; await saveConfig(); return; }
+    else if (key === 'theme') { cfg.theme = value as 'light' | 'dark'; await saveConfig(); return; }
+    else if (key === 'lightScheme') { cfg.lightScheme = value as string; await saveConfig(); return; }
+    else if (key === 'codeLeftWidth') { cfg.codeLeftWidth = value as number; await saveConfig(); return; }
     else if (key === 'fontScale') { cfg.fontScale = value as number; await saveConfig(); return; }
     else if (key === 'deepseekApiKey') {
       const ds = cfg.providers.find(p => p.id === 'deepseek');
@@ -314,32 +352,28 @@ export function setupIpcHandlers(
       active.baseUrl = value as string;
     }
     await saveConfig();
-    if (key === 'model' || key === 'activeProvider') {
-      sessionAgents.clear();
-    }
   });
 
   ipcMain.handle('config:get-full', () => getConfig());
 
   ipcMain.handle('config:get-providers', () => {
-    return getConfig().providers.map(p => ({ id: p.id, name: p.name, models: p.models }));
+    return getConfig().providers.map(p => ({ id: p.id, name: p.name, models: p.models.map(m => m.name) }));
   });
 
   ipcMain.handle('config:set-provider', async (_event, pc: ProviderConfig) => {
     const cfg = getConfig();
     const idx = cfg.providers.findIndex(p => p.id === pc.id);
     if (idx >= 0) {
-      // Merge: don't overwrite non-empty values with empty ones
       const existing = cfg.providers[idx];
       cfg.providers[idx] = {
         ...existing,
         name: pc.name || existing.name,
         baseUrl: pc.baseUrl || existing.baseUrl,
-        apiKey: pc.apiKey || existing.apiKey,
-        models: pc.models.length > 0 ? pc.models : existing.models,
+        apiKey: pc.apiKey !== undefined ? pc.apiKey : existing.apiKey,
+        models: Array.isArray(pc.models) ? pc.models : existing.models,
       };
     } else {
-      cfg.providers.push(pc);
+      cfg.providers.push({ ...pc, models: Array.isArray(pc.models) ? pc.models : [] });
     }
     await saveConfig();
   });
@@ -366,32 +400,22 @@ export function setupIpcHandlers(
     await saveConfig();
   });
 
-  // ---- Session persistence (file-based) ----
+  // ---- Session persistence (SQLite) ----
   ipcMain.handle('session:save', async (_event, session: SessionData) => {
-    await ensureSessionsDir();
-    const filePath = join(sessionsDir(), `${session.id}.json`);
-    let existing: SessionData | null = null;
-    try { const raw = await fs.readFile(filePath, 'utf8'); existing = JSON.parse(raw) as SessionData; } catch { /* */ }
-    const merged = { ...existing, ...session, updatedAt: session.updatedAt || Date.now() };
-    await fs.writeFile(filePath, JSON.stringify(merged, null, 2), 'utf8');
+    const agent = sessionAgents.get(session.id);
+    saveSession({
+      ...session,
+      agentMessages: agent ? agent.getMessages() : session.agentMessages,
+      updatedAt: session.updatedAt || Date.now(),
+    });
   });
 
   ipcMain.handle('session:load', async (_event, id: string) => {
-    try {
-      const content = await fs.readFile(join(sessionsDir(), `${id}.json`), 'utf8');
-      return JSON.parse(content) as SessionData;
-    } catch { return null; }
+    return loadSession(id);
   });
 
   ipcMain.handle('session:list', async () => {
-    await ensureSessionsDir();
-    const entries = await fs.readdir(sessionsDir());
-    const sessions: SessionData[] = [];
-    for (const entry of entries) {
-      if (!entry.endsWith('.json')) continue;
-      try { const content = await fs.readFile(join(sessionsDir(), entry), 'utf8'); sessions.push(JSON.parse(content) as SessionData); } catch { /* */ }
-    }
-    return sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return listSessions();
   });
 
   ipcMain.handle('session:delete', async (_event, id: string) => {
@@ -399,19 +423,11 @@ export function setupIpcHandlers(
     sessionAbortControllers.delete(id);
     sessionAgents.delete(id);
     cancelPendingInteractionsForSession(id, 'Session deleted');
-    try { await fs.unlink(join(sessionsDir(), `${id}.json`)); } catch { /* */ }
+    deleteSession(id);
   });
 
   ipcMain.handle('session:rename', async (_event, id: string, newTitle: string) => {
-    const filePath = join(sessionsDir(), `${id}.json`);
-    try {
-      const content = await fs.readFile(filePath, 'utf8');
-      const session = JSON.parse(content) as SessionData;
-      session.title = newTitle;
-      session.updatedAt = Date.now();
-      await fs.writeFile(filePath, JSON.stringify(session, null, 2), 'utf8');
-      return true;
-    } catch { return false; }
+    return renameSession(id, newTitle);
   });
 
   ipcMain.handle('session:generate-title', async (_event, userMessage: string) => {
@@ -440,7 +456,6 @@ export function setupIpcHandlers(
     const result = await discoverAgentMd(getConfig().agent.workspaceRoot);
     agentMdContent = result.content;
     agentMdFiles = result.files;
-    sessionAgents.clear();
     return result.files;
   });
 
@@ -449,10 +464,14 @@ export function setupIpcHandlers(
   });
 
   ipcMain.handle('memory:list', async () => {
-    const dirs = [
+    const { resolve } = require('path');
+    const memDirs = [
       join(getConfig().agent.workspaceRoot, '.deepseekcode', 'memory'),
       join(homedir(), '.deepseekcode', 'memory'),
     ];
+    // Deduplicate
+    const seen = new Set<string>();
+    const dirs = memDirs.filter(d => { const r = resolve(d); if (seen.has(r)) return false; seen.add(r); return true; });
     const results: Array<{ name: string; path: string }> = [];
     for (const memDir of dirs) {
       try {
@@ -512,6 +531,7 @@ export function setupIpcHandlers(
     const skill = getSkill(skillName);
     if (!skill) return false;
     await fs.writeFile(join(skill.rootDir, 'SKILL.md'), content, 'utf8');
+    await loadSkills(getConfig().agent.workspaceRoot);
     return true;
   });
 
@@ -523,6 +543,17 @@ export function setupIpcHandlers(
     await fs.rm(skill.rootDir, { recursive: true });
     await loadSkills(getConfig().agent.workspaceRoot);
     return true;
+  });
+
+  // ---- Dialog ----
+  ipcMain.handle('dialog:pick-dir', async () => {
+    const win = getWindow();
+    if (!win) return null;
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: '选择工作区目录',
+    });
+    return result.canceled ? null : result.filePaths[0] || null;
   });
 
   // ---- Terminal ----
