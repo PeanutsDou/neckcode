@@ -42,6 +42,11 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
     },
+    "publish": {
+      "provider": "github",
+      "owner": "PeanutsDou",
+      "repo": "deepseekcode"
+    },
     "asarUnpack": [
       "node_modules/better-sqlite3/**",
       "node_modules/mermaid/**"
@@ -52,6 +57,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@xterm/addon-fit": "^0.11.0",
     "better-sqlite3": "^12.9.0",
+    "electron-updater": "^6.8.3",
     "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.0.0",

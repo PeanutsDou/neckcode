@@ -1,5 +1,6 @@
-import { app, BrowserWindow, screen, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, screen, Tray, Menu, nativeImage, ipcMain } from 'electron';
 import path from 'path';
+import { autoUpdater } from 'electron-updater';
 import { setupIpcHandlers } from './ipc-handlers';
 import { createOpenAIProvider } from './providers/openai-compatible';
 import { createAnthropicProvider } from './providers/anthropic';
@@ -14,6 +15,56 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 const toolRegistries = new Map<string, ToolRegistry>();
 let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null;
+
+/* ── Auto updater ── */
+function setupAutoUpdater(): void {
+  // Only check for updates in packaged app, not dev mode
+  if (!app.isPackaged) return;
+
+  // Auto-download in background, notify when ready
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update:available', info.version);
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    mainWindow?.webContents.send('update:downloaded');
+  });
+
+  autoUpdater.on('error', () => {
+    // Silently ignore update errors — never interrupt user
+  });
+
+  // Check after a short delay so window is ready
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  }, 5000);
+}
+
+// IPC: trigger update check manually, download, and install
+ipcMain.handle('update:check', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { version: result?.updateInfo.version };
+  } catch {
+    return { error: '检查更新失败' };
+  }
+});
+
+ipcMain.handle('update:download', async () => {
+  try {
+    await autoUpdater.downloadUpdate();
+    return { ok: true };
+  } catch {
+    return { error: '下载失败' };
+  }
+});
+
+ipcMain.handle('update:install', () => {
+  autoUpdater.quitAndInstall();
+});
 
 function createProvider(): Provider {
   const cfg = getConfig();
@@ -63,12 +114,9 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
       },
       async (questions) => {
         return new Promise((resolve, reject) => {
-          // We need access to the IPC ask mechanism. Use a global approach.
           const win = BrowserWindow.getAllWindows()[0];
           if (!win) { reject(new Error('No window')); return; }
-          // Send questions to renderer and wait for response
           const askId = `ask_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-          // Register the pending promise via a module-level store
           const { pendingAsks } = require('./ipc-handlers');
           pendingAsks.set(askId, { sessionId, resolve, reject });
           win.webContents.send('agent:run-status', sessionId, {
@@ -140,12 +188,9 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  // Persist bounds after resizing/moving settles. Writing config on every native
-  // resize frame can make Windows compositor repaint behind the renderer.
   mainWindow.on('resize', scheduleSaveWindowBounds);
   mainWindow.on('move', scheduleSaveWindowBounds);
 
-  // Minimize to tray instead of closing
   mainWindow.on('close', (event) => {
     if (tray && !(app as any).__quitting) {
       event.preventDefault();
@@ -208,6 +253,7 @@ app.whenReady().then(async () => {
   await initSkills();
   createWindow();
   createTray();
+  setupAutoUpdater();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

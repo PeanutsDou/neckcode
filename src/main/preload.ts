@@ -14,7 +14,7 @@ const api = {
   resetAgent: (sessionId: string) => ipcRenderer.invoke('agent:reset', sessionId),
   setAgentContext: (sessionId: string, messages: unknown[]) => ipcRenderer.invoke('agent:set-context', sessionId, messages),
 
-  // Agent events — now include sessionId as first argument
+  // Agent events
   onDelta: (cb: (sid: string, text: string) => void) => {
     const listener = (_event: unknown, sid: string, text: string) => cb(sid, text);
     ipcRenderer.on('agent:delta', listener);
@@ -61,7 +61,7 @@ const api = {
   getDeepSeekBalance: () => ipcRenderer.invoke('balance:query', 'deepseek'),
   getProviderBalance: (providerId: string) => ipcRenderer.invoke('balance:query', providerId),
 
-  // File system (direct, not through agent)
+  // File system
   listDir: (dirPath: string) => ipcRenderer.invoke('fs:list-dir', dirPath),
   readFile: (filePath: string) => ipcRenderer.invoke('fs:read-file', filePath),
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:write-file', filePath, content),
@@ -124,6 +124,21 @@ const api = {
   // Permissions
   getPermissionMode: () => ipcRenderer.invoke('permission:get'),
   setPermissionMode: (mode: string) => ipcRenderer.invoke('permission:set', mode),
+
+  // Auto-update
+  onUpdateAvailable: (cb: (version: string) => void) => {
+    const listener = (_: unknown, version: string) => cb(version);
+    ipcRenderer.on('update:available', listener);
+    return () => ipcRenderer.removeListener('update:available', listener);
+  },
+  onUpdateDownloaded: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('update:downloaded', listener);
+    return () => ipcRenderer.removeListener('update:downloaded', listener);
+  },
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

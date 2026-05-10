@@ -2438,6 +2438,29 @@ html, body {
   color: var(--text-muted);
 }
 
+/* ===== Update Banner ===== */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  padding: 3px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.update-banner .btn-send {
+  font-size: 11px;
+  padding: 3px 10px;
+}
+
+.update-banner .settings-btn-sm {
+  font-size: 10px;
+}
+
 /* ===== Ask Dialog ===== */
 
 .ask-dialog {

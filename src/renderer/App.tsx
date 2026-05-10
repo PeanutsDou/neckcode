@@ -12,6 +12,7 @@ import { MemoryDialog } from './components/MemoryDialog';
 import { WorkspaceBar } from './components/WorkspaceBar';
 import { ImageViewer } from './components/ImageViewer';
 import { ResizeHandle } from './components/ResizeHandle';
+import { UpdateBanner } from './components/UpdateBanner';
 import { useAppStore } from './stores/app-store';
 import { LIGHT_SCHEMES, normalizeLightScheme, type LightSchemeId } from './theme-schemes';
 
@@ -156,7 +157,9 @@ export default function App() {
             <img src="./icon.png" className="toolbar-icon" alt="" />
             <span className="toolbar-title">DeepSeek Code</span>
           </div>
-          <div className="toolbar-center" />
+          <div className="toolbar-center">
+            <UpdateBanner />
+          </div>
           <div className="toolbar-right">
             <button className="toolbar-btn" onClick={() => setSkillsOpen(true)}>
               技能
