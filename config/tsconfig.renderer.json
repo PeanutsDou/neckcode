@@ -5,8 +5,8 @@
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "outDir": "dist/renderer",
-    "rootDir": "src",
+    "outDir": "../dist/renderer",
+    "rootDir": "../src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -15,5 +15,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/**/*.ts"]
+  "include": ["../src/renderer/**/*.ts", "../src/renderer/**/*.tsx", "../src/shared/**/*.ts"]
 }

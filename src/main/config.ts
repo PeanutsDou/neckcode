@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 import { encrypt, decrypt } from './config/secrets';
 import type { PermissionMode } from '../shared/permissions';
 
@@ -32,7 +33,7 @@ export interface AppConfigData {
   };
 }
 
-const CONFIG_DIR = join(process.cwd(), '.deepseekcode');
+const CONFIG_DIR = join(homedir(), '.deepseekcode');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 const DEFAULT_PROVIDERS: ProviderConfig[] = [
@@ -60,7 +61,7 @@ const defaultConfig: AppConfigData = {
     maxTurns: 8,
     maxTokens: 32768,
     contextLimit: 0,
-    workspaceRoot: process.cwd(),
+    workspaceRoot: homedir(),
   },
   systemPrompt: 'You are a helpful coding assistant. Use tools when needed. Be concise and factual.',
   permissionMode: 'default',

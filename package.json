@@ -7,9 +7,9 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
     "dev:main": "npm run build:main && node node_modules/electron/cli.js .",
-    "dev:renderer": "node node_modules/vite/bin/vite.js --config vite.config.ts",
-    "build:main": "tsc -p tsconfig.main.json",
-    "build:renderer": "vite build",
+    "dev:renderer": "node node_modules/vite/bin/vite.js --config config/vite.config.ts",
+    "build:main": "tsc -p config/tsconfig.main.json",
+    "build:renderer": "node node_modules/vite/bin/vite.js build --config config/vite.config.ts",
     "start": "node node_modules/electron/cli.js ."
   },
   "dependencies": {

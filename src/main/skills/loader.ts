@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import { join, resolve, basename } from 'path';
 import { homedir } from 'os';
+import { app } from 'electron';
 import type { Skill } from './types';
 
 async function exists(p: string): Promise<boolean> {
@@ -129,8 +130,19 @@ export function getSkill(name: string): Skill | undefined {
   return cachedSkills.find(s => s.name === normalized);
 }
 
+function getBuiltInSkillsDir(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'skills');
+  }
+  // __dirname = dist/main/skills, need ../../.. for project-root/skills
+  return join(__dirname, '../../../skills');
+}
+
 export async function loadSkills(workspaceRoot?: string): Promise<Skill[]> {
   const dirs: string[] = [];
+
+  // Built-in skills (shipped with the app) — loaded first, project skills override
+  dirs.push(getBuiltInSkillsDir());
 
   // Project skills
   if (workspaceRoot) {

@@ -1,9 +1,10 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 
 const ALGO = 'aes-256-gcm';
-const KEY_FILE = join(process.cwd(), '.deepseekcode', '.key');
+const KEY_FILE = join(homedir(), '.deepseekcode', '.key');
 
 let masterKey: Buffer | null = null;
 
@@ -14,7 +15,7 @@ async function getKey(): Promise<Buffer> {
     masterKey = Buffer.from(raw.trim(), 'hex');
   } catch {
     masterKey = randomBytes(32);
-    await fs.mkdir(join(process.cwd(), '.deepseekcode'), { recursive: true });
+    await fs.mkdir(join(homedir(), '.deepseekcode'), { recursive: true });
     await fs.writeFile(KEY_FILE, masterKey.toString('hex'), 'utf8');
   }
   return masterKey;

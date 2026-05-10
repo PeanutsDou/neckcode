@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import { dirname, resolve, join } from 'path';
+import { homedir } from 'os';
 import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
@@ -38,7 +39,7 @@ export function getPermissionMode(): PermissionMode {
 }
 
 function sessionsDir(): string {
-  return join(getConfig().agent.workspaceRoot, '.sessions');
+  return join(homedir(), '.deepseekcode', 'sessions');
 }
 
 async function ensureSessionsDir(): Promise<void> {
@@ -448,7 +449,6 @@ export function setupIpcHandlers(
   });
 
   ipcMain.handle('memory:list', async () => {
-    const { homedir } = require('os');
     const dirs = [
       join(getConfig().agent.workspaceRoot, '.deepseekcode', 'memory'),
       join(homedir(), '.deepseekcode', 'memory'),

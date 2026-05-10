@@ -4,7 +4,7 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
-  root: 'src/renderer',
+  root: '../src/renderer',
   base: './',
   build: {
     outDir: '../../dist/renderer',
@@ -12,7 +12,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@shared': path.resolve(__dirname, 'src/shared'),
+      '@shared': path.resolve(__dirname, '../src/shared'),
     },
   },
   server: {

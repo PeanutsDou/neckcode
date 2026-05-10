@@ -2,10 +2,7 @@ node_modules/
 dist/
 .env
 *.db
-.sessions/
-.deepseekcode/config.json
-.deepseekcode/secrets.json
-.deepseekcode/.key
+.deepseekcode/
 # Compiled TS artifacts in src/
 src/**/*.js
 src/**/*.js.map
