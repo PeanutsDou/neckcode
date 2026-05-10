@@ -1052,41 +1052,35 @@ html, body {
   align-self: flex-start;
 }
 
-/* core dot — warm muted tone, subtle pulse */
-.streaming-spark::before {
+/* 4-pointed star — two bars, rotating + pulsing */
+.streaming-spark::before,
+.streaming-spark::after {
   content: '';
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--text-secondary);
-  animation: spark-core 1s ease-in-out infinite;
+  background: var(--accent);
+  border-radius: 1px;
+  box-shadow: 0 0 2px var(--accent), 0 0 5px var(--accent-dim);
 }
 
-/* subtle ring */
+.streaming-spark::before {
+  width: 3px;
+  height: 10px;
+  animation: spark-bar 0.85s ease-in-out infinite;
+}
+
 .streaming-spark::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 50%;
-  border: 1.5px solid transparent;
-  border-top-color: var(--text-muted);
-  border-right-color: var(--text-muted);
-  opacity: 0.35;
-  animation: spark-ring 1.2s linear infinite;
+  width: 10px;
+  height: 3px;
+  animation: spark-bar 0.85s ease-in-out 0.43s infinite;
 }
 
-@keyframes spark-core {
-  0%, 100% { transform: scale(0.7); opacity: 0.3; }
-  50% { transform: scale(1.15); opacity: 0.7; }
-}
-
-@keyframes spark-ring {
-  0% { transform: rotate(0deg) scale(1); opacity: 0.35; }
-  50% { transform: rotate(180deg) scale(1.25); opacity: 0.12; }
-  100% { transform: rotate(360deg) scale(1); opacity: 0.35; }
+@keyframes spark-bar {
+  0%   { transform: scaleY(0.6) scaleX(0.6) rotate(0deg);   opacity: 0.35; }
+  30%  { transform: scaleY(1.4) scaleX(0.7) rotate(25deg);  opacity: 1; }
+  60%  { transform: scaleY(0.8) scaleX(1.1) rotate(-25deg); opacity: 0.7; }
+  100% { transform: scaleY(0.6) scaleX(0.6) rotate(0deg);   opacity: 0.35; }
 }
 
 /* ===== Input ===== */

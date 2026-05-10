@@ -50,7 +50,7 @@ export function ChatPanel() {
 
   // ── hooks ──
   useIpcListeners();
-  const bottomRef = useScrollToBottom({ entries, streamingText, thinkingText, isStreaming });
+  const bottomRef = useScrollToBottom({ entries, streamingText, thinkingText, isStreaming, sessionId: activeId || 'default' });
   const elapsed = useStreamTimer(isStreaming, runStartedAt);
   const streamMetric = useStreamMetric(entries, streamingText, thinkingText, isStreaming, runState, elapsed);
 
