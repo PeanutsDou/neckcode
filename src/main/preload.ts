@@ -125,6 +125,14 @@ const api = {
   getPermissionMode: () => ipcRenderer.invoke('permission:get'),
   setPermissionMode: (mode: string) => ipcRenderer.invoke('permission:set', mode),
 
+  // Close dialog
+  onCloseAsk: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('close:ask', listener);
+    return () => ipcRenderer.removeListener('close:ask', listener);
+  },
+  closeChoice: (action: string, remember: boolean) => ipcRenderer.invoke('close:choice', action, remember),
+
   // Auto-update
   onUpdateAvailable: (cb: (version: string) => void) => {
     const listener = (_: unknown, version: string) => cb(version);

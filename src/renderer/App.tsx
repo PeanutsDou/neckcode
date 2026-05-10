@@ -11,6 +11,7 @@ import { SkillsDialog } from './components/SkillsDialog';
 import { MemoryDialog } from './components/MemoryDialog';
 import { WorkspaceBar } from './components/WorkspaceBar';
 import { ImageViewer } from './components/ImageViewer';
+import { CloseDialog } from './components/CloseDialog';
 import { ResizeHandle } from './components/ResizeHandle';
 import { UpdateBanner } from './components/UpdateBanner';
 import { useAppStore } from './stores/app-store';
@@ -157,9 +158,7 @@ export default function App() {
             <img src="./icon.png" className="toolbar-icon" alt="" />
             <span className="toolbar-title">DeepSeek Code</span>
           </div>
-          <div className="toolbar-center">
-            <UpdateBanner />
-          </div>
+          <div className="toolbar-center" />
           <div className="toolbar-right">
             <button className="toolbar-btn" onClick={() => setSkillsOpen(true)}>
               技能
@@ -255,6 +254,7 @@ export default function App() {
                 <div className="sidebar-left" style={{ width: leftWidth }}>
                   <SessionList />
                   <div className="sidebar-left-bottom">
+                    <UpdateBanner />
                     <ContextBar />
                   </div>
                 </div>
@@ -272,6 +272,7 @@ export default function App() {
         <SkillsDialog open={skillsOpen} onClose={() => setSkillsOpen(false)} />
         <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
         <ImageViewer open={!!viewerSrc} src={viewerSrc || ''} onClose={() => setViewerSrc(null)} />
+        <CloseDialog />
         <AskDialog />
       </div>
     </ErrorBoundary>

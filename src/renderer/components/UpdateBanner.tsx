@@ -34,19 +34,19 @@ export function UpdateBanner() {
   return (
     <div className="update-banner">
       {status === 'available' && (
-        <>
-          <span>新版本 v{version} 可用</span>
-          <button className="settings-btn-sm" onClick={handleDownload}>下载更新</button>
-        </>
+        <div className="update-banner-inner">
+          <span className="update-banner-msg">v{version} 可用</span>
+          <button className="settings-btn-sm" onClick={handleDownload}>下载</button>
+        </div>
       )}
       {status === 'downloading' && (
-        <span>正在下载更新...</span>
+        <span className="update-banner-msg">下载中...</span>
       )}
       {status === 'downloaded' && (
-        <>
-          <span>更新已就绪</span>
+        <div className="update-banner-inner">
+          <span className="update-banner-msg">已就绪</span>
           <button className="btn btn-send" onClick={handleInstall}>重启安装</button>
-        </>
+        </div>
       )}
     </div>
   );

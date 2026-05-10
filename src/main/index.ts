@@ -66,6 +66,20 @@ ipcMain.handle('update:install', () => {
   autoUpdater.quitAndInstall();
 });
 
+ipcMain.handle('close:choice', async (_event, action: string, remember: boolean) => {
+  if (remember) {
+    const cfg = getConfig();
+    cfg.closeBehavior = action as 'tray' | 'quit';
+    await saveConfig();
+  }
+  if (action === 'tray') {
+    mainWindow?.hide();
+  } else {
+    (app as any).__quitting = true;
+    app.quit();
+  }
+});
+
 function createProvider(): Provider {
   const cfg = getConfig();
   const active = getActiveProvider();
@@ -192,12 +206,24 @@ function createWindow(): void {
   mainWindow.on('move', scheduleSaveWindowBounds);
 
   mainWindow.on('close', (event) => {
-    if (tray && !(app as any).__quitting) {
+    if ((app as any).__quitting) {
+      saveWindowBounds();
+      return;
+    }
+    const behavior = getConfig().closeBehavior || 'ask';
+    if (behavior === 'tray') {
       event.preventDefault();
       mainWindow?.hide();
       return;
     }
-    saveWindowBounds();
+    if (behavior === 'quit') {
+      (app as any).__quitting = true;
+      saveWindowBounds();
+      return;
+    }
+    // 'ask': show dialog
+    event.preventDefault();
+    mainWindow?.webContents.send('close:ask');
   });
 
   mainWindow.on('closed', () => {

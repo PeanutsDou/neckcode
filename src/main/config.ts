@@ -32,6 +32,7 @@ export interface AppConfigData {
   permissionMode: PermissionMode;
   theme?: 'light' | 'dark';
   lightScheme?: string;
+  closeBehavior?: 'ask' | 'tray' | 'quit';
   fontScale?: number;
   codeLeftWidth?: number;
   window?: {
