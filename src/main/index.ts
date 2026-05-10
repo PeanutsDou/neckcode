@@ -244,8 +244,95 @@ function createTray(): void {
   });
 }
 
+async function ensureDefaultTemplates(): Promise<void> {
+  const { promises: fs } = require('fs');
+  const { join } = require('path');
+  const { homedir } = require('os');
+  const base = join(homedir(), '.deepseekcode');
+
+  // AGENT.md
+  const agentMd = join(base, 'AGENT.md');
+  try { await fs.access(agentMd); } catch {
+    await fs.mkdir(base, { recursive: true });
+    await fs.writeFile(agentMd, `# DeepSeek Code — 用户指令
+
+这是你的全局 AGENT.md 文件。在这里定义你的偏好、规则和工作风格，
+Agent 每次对话都会自动加载这些指令。
+
+## 基本设置
+
+- 工作语言：中文
+- 代码风格：简洁，不加多余的注释和文档
+- 回答风格：直接切中要点
+
+## 自定义指令
+
+<!-- 在下方添加你的自定义指令 -->
+
+`, 'utf8');
+  }
+
+  // Memory index
+  const memDir = join(base, 'memory');
+  const memIdx = join(memDir, 'MEMORY.md');
+  try { await fs.access(memIdx); } catch {
+    await fs.mkdir(memDir, { recursive: true });
+    await fs.writeFile(memIdx, `# MEMORY
+
+记忆索引文件。Agent 可以在这里读写长期记忆。
+
+## 格式
+
+每条记忆一个独立的 .md 文件，MEMORY.md 只做索引：
+
+- [示例记忆](example.md) — 这是一个示例记忆条目
+
+`, 'utf8');
+  }
+
+  // Skills README
+  const skillsDir = join(base, 'skills');
+  const skillsReadme = join(skillsDir, 'README.md');
+  try { await fs.access(skillsReadme); } catch {
+    await fs.mkdir(skillsDir, { recursive: true });
+    await fs.writeFile(skillsReadme, `# 自定义技能
+
+在这里添加你自己的技能（Skill）。
+
+## 格式
+
+每个技能是一个子目录，目录名即为技能名，目录内包含一个 SKILL.md 文件：
+
+\`\`\`
+~/.deepseekcode/skills/
+  my-skill/
+    SKILL.md
+\`\`\`
+
+## 技能模板
+
+\`\`\`markdown
+---
+name: my-skill
+description: 一句话描述这个技能做什么。TRIGGER when: 触发条件。SKIP: 不适用的情况。
+version: 0.1.0
+---
+
+# 技能名称
+
+详细说明和操作流程...
+\`\`\`
+
+## 参考
+
+内置技能位于应用目录下的 \`skills/\` 文件夹，可参考其写法。
+`, 'utf8');
+  }
+}
+
 app.whenReady().then(async () => {
   await loadConfig();
+  await ensureDefaultTemplates();
   await loadSkills(getConfig().agent.workspaceRoot);
   setupIpcHandlers(createProvider, getOrCreateTools);
   const { initAgentMd, initSkills } = require('./ipc-handlers');
