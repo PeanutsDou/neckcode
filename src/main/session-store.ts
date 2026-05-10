@@ -61,7 +61,7 @@ function rowToSession(row: SessionRow, includeMessages: boolean): SessionData {
   return session;
 }
 
-function getDb(): Database.Database {
+export function getDb(): Database.Database {
   if (db) return db;
 
   mkdirSync(dataDir(), { recursive: true });

@@ -69,7 +69,6 @@ export class AgentRuntime {
     const estimatedTokens = this.session.estimateTokens();
     if (estimatedTokens > this.contextLimit * 0.8) {
       this.session.compact(5); // Keep last 5 turns
-      callbacks.onDelta?.('[Context compacted] ');
     }
 
     try {

@@ -1,4 +1,4 @@
-import { promises as fs, existsSync, statSync } from 'fs';
+import { promises as fs, existsSync } from 'fs';
 import { dirname, resolve, join, relative, extname, isAbsolute } from 'path';
 import { exec as execCb, execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';

@@ -259,7 +259,6 @@ export default function App() {
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <SkillsDialog open={skillsOpen} onClose={() => setSkillsOpen(false)} />
         <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
-
         <AskDialog />
       </div>
     </ErrorBoundary>

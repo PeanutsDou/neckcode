@@ -163,6 +163,7 @@ export function setupIpcHandlers(
         abortCtrl.signal,
       );
       if (flushTimer) { clearInterval(flushTimer); flushDelta(); }
+
       return result;
     } catch (err) {
       if (flushTimer) { clearInterval(flushTimer); flushDelta(); }

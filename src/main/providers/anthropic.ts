@@ -68,6 +68,13 @@ function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
   return result;
 }
 
+export function buildAnthropicSystemPrompt(messages: Message[]): string | undefined {
+  const parts = messages
+    .filter(msg => msg.role === 'system' && msg.content.trim().length > 0)
+    .map(msg => msg.content.trim());
+  return parts.length > 0 ? parts.join('\n\n') : undefined;
+}
+
 function toAnthropicTools(tools: { type: string; function: { name: string; description: string; parameters: Record<string, unknown> } }[]): Anthropic.Tool[] {
   return tools.map(t => ({
     name: t.function.name,
@@ -87,9 +94,10 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
     async runStep({ messages, tools, model, onDelta, onReasoning, signal }) {
       const actualModel = model === 'default' ? config.model : model;
 
-      // Extract system prompt
-      const systemMsg = messages.find(m => m.role === 'system');
-      const systemPrompt = systemMsg?.content;
+      // Anthropic has a single top-level system field, so preserve both the
+      // base prompt and any compacted context summaries by joining all system
+      // messages instead of dropping everything after the first one.
+      const systemPrompt = buildAnthropicSystemPrompt(messages);
 
       const apiMessages = toAnthropicMessages(messages);
       const apiTools = tools.length > 0 ? toAnthropicTools(tools) : undefined;

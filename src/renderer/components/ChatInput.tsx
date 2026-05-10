@@ -34,7 +34,8 @@ export function ChatInput() {
   const [showCommands, setShowCommands] = useState(false);
   const [commandIdx, setCommandIdx] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { addEntryTo, setStreamingTo, clearActive, setPendingContext, focusVersion } = useChatStore();
+  const cmdListRef = useRef<HTMLDivElement>(null);
+  const { addEntryTo, setStreamingTo, setPendingContext, focusVersion } = useChatStore();
   const isStreaming = useActiveIsStreaming();
   const pendingContext = useActivePendingContext();
 
@@ -74,23 +75,18 @@ export function ChatInput() {
     }).catch(() => {});
   }, []);
 
-  const commands: SlashCommand[] = [
-    { name: '/clear', desc: '清空对话', handler: () => { const sid = getSessionId() || ''; clearActive(); window.electronAPI?.resetAgent(sid); } },
-    { name: '/model', desc: '切换模型', handler: (args) => {
-        const m = availableModels.find(x => x.includes(args.trim()));
-        if (m) setModel(m);
-    }},
-    { name: '/file', desc: '读文件到上下文', handler: async (args) => {
-        try { setPendingContext(await window.electronAPI.readFile(args.trim())); } catch { /* */ }
-    }},
-    { name: '/commit', desc: '生成 commit 信息', handler: () => setText('为暂存的改动生成一条简洁的 git commit') },
-    { name: '/review', desc: '代码审查', handler: () => setText('审查暂存的改动，检查问题') },
-    ...skillCommands,
-  ];
+  const commands: SlashCommand[] = skillCommands;
 
   const filteredCommands = text.startsWith('/') && !text.includes(' ')
     ? commands.filter(c => c.name.startsWith(text)) : [];
   const canSend = text.trim().length > 0 || images.length > 0;
+
+  // Scroll active command into view
+  useEffect(() => {
+    if (!cmdListRef.current) return;
+    const active = cmdListRef.current.querySelector('.slash-command-item.active');
+    active?.scrollIntoView({ block: 'nearest' });
+  }, [commandIdx]);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value;
@@ -210,7 +206,7 @@ export function ChatInput() {
       <div className="input-resize-handle" onMouseDown={handleResizeStart} />
       <div className="chat-input-wrapper">
         {showCommands && filteredCommands.length > 0 && (
-          <div className="slash-commands">
+          <div className="slash-commands" ref={cmdListRef}>
             {filteredCommands.map((cmd, i) => (
               <div key={cmd.name} className={`slash-command-item ${i === commandIdx ? 'active' : ''}`}
                 onClick={() => executeCommand(cmd)}>

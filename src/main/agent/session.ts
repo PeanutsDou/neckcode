@@ -88,9 +88,14 @@ export class ChatSession {
 
   /** Estimate total tokens with CJK-aware weighting */
   estimateTokens(): number {
-    let total = 0;
+    let total = this.systemPrompt ? this._tokenEstimate(this.systemPrompt) : 0;
     for (const m of this.messages) {
       total += this._tokenEstimate(m.content);
+      if (m.attachments) {
+        // Image token usage is provider-specific; reserve a conservative budget
+        // so image-heavy turns can still trigger compaction before API failure.
+        total += m.attachments.length * 1024;
+      }
       if (m.toolCalls) {
         for (const tc of m.toolCalls) total += this._tokenEstimate(tc.argumentsText);
       }
@@ -120,15 +125,15 @@ export class ChatSession {
   }
 
   /** Compact: replace early messages with a system summary, keeping recent turn groups intact */
-  compact(keepRecentTurns: number): void {
+  compact(keepRecentTurns: number, maxSummaryChars: number = 12000): void {
     // Count turns from the end: a turn = user + assistant + any following tool messages
     let turnCount = 0;
-    let cutoff = this.messages.length;
+    let cutoff = -1;
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
       if (m.role === 'user') {
         turnCount++;
-        if (turnCount > keepRecentTurns) {
+        if (turnCount === keepRecentTurns) {
           cutoff = i;
           break;
         }
@@ -141,13 +146,28 @@ export class ChatSession {
     const recentMessages = this.messages.slice(cutoff);
 
     const summaryParts: string[] = [];
+    let summaryChars = 0;
+    const pushSummaryPart = (text: string) => {
+      if (summaryChars >= maxSummaryChars) return;
+      const remaining = maxSummaryChars - summaryChars;
+      const clipped = text.length > remaining ? `${text.slice(0, Math.max(0, remaining - 3))}...` : text;
+      summaryParts.push(clipped);
+      summaryChars += clipped.length + 1;
+    };
+
     for (const m of earlyMessages) {
-      if (m.role === 'user') {
-        summaryParts.push(`User: ${m.content.slice(0, 200)}`);
+      if (m.role === 'system') {
+        pushSummaryPart(m.content);
+      } else if (m.role === 'user') {
+        pushSummaryPart(`User: ${m.content.slice(0, 1000)}`);
       } else if (m.role === 'assistant') {
-        summaryParts.push(`Assistant: ${m.content.slice(0, 200)}`);
+        const toolNames = m.toolCalls?.map(tc => tc.name).filter(Boolean).join(', ');
+        pushSummaryPart(`Assistant${toolNames ? ` (tool calls: ${toolNames})` : ''}: ${m.content.slice(0, 1000)}`);
+        for (const tc of m.toolCalls || []) {
+          pushSummaryPart(`Tool call ${tc.name} args: ${tc.argumentsText.slice(0, 800)}`);
+        }
       } else if (m.role === 'tool') {
-        summaryParts.push(`[Tool result: ${m.content.slice(0, 100)}]`);
+        pushSummaryPart(`Tool result ${m.toolCallId || 'unknown'}: ${m.content.slice(0, 800)}`);
       }
     }
 
