@@ -22,7 +22,7 @@ function setupAutoUpdater(): void {
   if (!app.isPackaged) return;
 
   // Auto-download in background, notify when ready
-  autoUpdater.autoDownload = false;
+  autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('update-available', (info) => {
