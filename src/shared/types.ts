@@ -62,3 +62,100 @@ export interface ToolDefinition {
   };
   readOnly?: boolean;
 }
+
+// --- Runtime Observability ---
+
+export type RunPhase =
+  | 'idle'
+  | 'starting'
+  | 'requesting_model'
+  | 'thinking'
+  | 'streaming'
+  | 'tool_running'
+  | 'waiting_user'
+  | 'finishing'
+  | 'aborted'
+  | 'error';
+
+export interface RunState {
+  phase: RunPhase;
+  startedAt: number | null;
+  lastEventAt: number | null;
+  currentTool?: string | null;
+  lastTool?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  errorCode?: AgentErrorCode | null;
+}
+
+export type AgentErrorCode =
+  | 'auth_error'
+  | 'network_error'
+  | 'rate_limited'
+  | 'model_not_found'
+  | 'context_limit'
+  | 'tool_error'
+  | 'permission_denied'
+  | 'aborted'
+  | 'unknown';
+
+export interface AgentError {
+  code: AgentErrorCode;
+  message: string;
+  suggestion: string;
+  retryable: boolean;
+  providerId?: string;
+  model?: string;
+  raw?: string;
+}
+
+export interface RunStatusEvent extends Partial<RunState> {
+  phase: RunPhase;
+}
+
+// --- Permission / Confirmation ---
+
+export type RiskLevel = 'low' | 'medium' | 'high';
+
+export interface ConfirmRequest {
+  toolName: string;
+  riskLevel: RiskLevel;
+  summary: string;
+  cwd?: string;
+  command?: string;
+  paths?: string[];
+  warnings?: string[];
+  rawArgs?: Record<string, unknown>;
+}
+
+// --- Provider Diagnostics ---
+
+export interface ProviderTestConfig {
+  providerId?: string;
+  name?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  model: string;
+}
+
+export type ProviderTestStatus = 'pass' | 'warn' | 'fail';
+
+export interface ProviderTestCheck {
+  id: string;
+  label: string;
+  status: ProviderTestStatus;
+  message: string;
+}
+
+export interface ProviderTestResult {
+  status: ProviderTestStatus;
+  summary: string;
+  checks: ProviderTestCheck[];
+  suggestion?: string;
+  balance?: {
+    total: string;
+    toppedUp?: string;
+    granted?: string;
+    currency: string;
+  };
+}

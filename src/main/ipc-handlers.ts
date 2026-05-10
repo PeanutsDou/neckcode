@@ -9,6 +9,7 @@ import type { Message } from './agent/types';
 import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig } from './config';
 import type { AppConfigData, ProviderConfig } from './config';
 import type { PermissionMode } from '../shared/permissions';
+import type { AgentError, AgentErrorCode, ProviderTestCheck, ProviderTestConfig, ProviderTestResult, RunStatusEvent } from '../shared/types';
 import { discoverAgentMd } from './agent-md';
 import { getLoadedSkills, loadSkills } from './skills/loader';
 import {
@@ -29,6 +30,7 @@ export const pendingConfirms = new Map<string, { sessionId: string; resolve: (ap
 
 const sessionAgents = new Map<string, AgentRuntime>();
 const sessionAbortControllers = new Map<string, AbortController>();
+const sessionRunningTurns = new Map<string, Promise<unknown>>();
 
 let currentPermissionMode: PermissionMode = getConfig().permissionMode || 'default';
 
@@ -68,6 +70,174 @@ function buildFullPrompt(): string {
 
 function getWindow() {
   return BrowserWindow.getAllWindows()[0];
+}
+
+function emitRunStatus(sessionId: string, status: RunStatusEvent): void {
+  getWindow()?.webContents.send('agent:run-status', sessionId, {
+    ...status,
+    lastEventAt: status.lastEventAt || Date.now(),
+  });
+}
+
+function normalizeOpenAIBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/(chat\/completions|completions|v1)\/?$/, '');
+}
+
+function classifyAgentError(error: unknown): AgentError {
+  const cfg = getConfig();
+  const raw = error instanceof Error ? error.message : String(error);
+  const lower = raw.toLowerCase();
+  let code: AgentErrorCode = 'unknown';
+  let suggestion = '请复制错误信息后重试；如果持续出现，检查 Provider 配置和网络连接。';
+  let retryable = false;
+
+  if (lower.includes('aborted') || lower.includes('aborterror')) {
+    code = 'aborted';
+    suggestion = '任务已中断。';
+  } else if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('api key')) {
+    code = 'auth_error';
+    suggestion = '检查 API Key 是否正确、是否过期，以及当前 Provider 是否需要额外权限。';
+  } else if (lower.includes('429') || lower.includes('rate limit') || lower.includes('too many requests')) {
+    code = 'rate_limited';
+    suggestion = '请求过于频繁或额度受限，稍后重试或切换模型。';
+    retryable = true;
+  } else if (lower.includes('404') || lower.includes('model') && (lower.includes('not found') || lower.includes('does not exist'))) {
+    code = 'model_not_found';
+    suggestion = '检查模型名称是否拼写正确，以及该 Provider 是否开放该模型。';
+  } else if (lower.includes('context') || lower.includes('maximum context') || lower.includes('token limit')) {
+    code = 'context_limit';
+    suggestion = '上下文过长。可以新建会话、减少输入内容，或等待上下文压缩后重试。';
+  } else if (lower.includes('permission') || lower.includes('operation cancelled')) {
+    code = 'permission_denied';
+    suggestion = '操作被取消或权限不足。确认权限模式和工具确认弹窗。';
+  } else if (lower.includes('fetch failed') || lower.includes('network') || lower.includes('econn') || lower.includes('timeout')) {
+    code = 'network_error';
+    suggestion = '网络请求失败。检查网络、代理、Base URL，稍后重试。';
+    retryable = true;
+  } else if (lower.startsWith('error:')) {
+    code = 'tool_error';
+    suggestion = '工具执行失败。检查工具参数、路径或命令输出。';
+  }
+
+  return {
+    code,
+    message: raw.length > 1000 ? `${raw.slice(0, 1000)}...` : raw,
+    suggestion,
+    retryable,
+    providerId: cfg.activeProvider,
+    model: cfg.activeModel,
+    raw,
+  };
+}
+
+function checkFromError(id: string, label: string, error: unknown): ProviderTestCheck {
+  const classified = classifyAgentError(error);
+  return { id, label, status: 'fail', message: classified.message };
+}
+
+async function testOpenAICompatibleProvider(input: ProviderTestConfig): Promise<ProviderTestResult> {
+  const checks: ProviderTestCheck[] = [];
+  const apiKey = input.apiKey?.trim() || '';
+  const model = input.model?.trim() || '';
+  const baseUrl = normalizeOpenAIBaseUrl(input.baseUrl || '');
+
+  if (!apiKey) checks.push({ id: 'api_key', label: 'API Key', status: 'fail', message: 'API Key 为空。' });
+  else checks.push({ id: 'api_key', label: 'API Key', status: 'pass', message: '已填写。' });
+  if (!baseUrl) checks.push({ id: 'base_url', label: 'Base URL', status: 'fail', message: 'Base URL 为空。' });
+  else checks.push({ id: 'base_url', label: 'Base URL', status: 'pass', message: baseUrl });
+  if (!model) checks.push({ id: 'model', label: '模型', status: 'fail', message: '模型名为空。' });
+  if (checks.some(c => c.status === 'fail')) {
+    return { status: 'fail', summary: '配置不完整。', checks, suggestion: '补全 API Key、Base URL 和模型名后再诊断。' };
+  }
+
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
+  const endpoint = `${baseUrl}/chat/completions`;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Reply with OK.' }],
+        stream: false,
+        max_tokens: 16,
+        temperature: 0,
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text().catch(() => '')}`);
+    checks.push({ id: 'chat', label: '最小对话', status: 'pass', message: '模型可完成非流式请求。' });
+  } catch (err) {
+    checks.push(checkFromError('chat', '最小对话', err));
+    return { status: 'fail', summary: 'Provider 诊断失败。', checks, suggestion: classifyAgentError(err).suggestion };
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Reply with OK.' }],
+        stream: true,
+        max_tokens: 16,
+        temperature: 0,
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text().catch(() => '')}`);
+    checks.push({ id: 'streaming', label: '流式输出', status: response.body ? 'pass' : 'warn', message: response.body ? '支持流式响应。' : '响应成功，但未返回可读流。' });
+    await response.body?.cancel().catch(() => {});
+  } catch (err) {
+    checks.push({ id: 'streaming', label: '流式输出', status: 'warn', message: classifyAgentError(err).message });
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Call diagnostic_echo with text OK.' }],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'diagnostic_echo',
+            description: 'Echo diagnostic text.',
+            parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+          },
+        }],
+        tool_choice: 'auto',
+        stream: false,
+        max_tokens: 32,
+        temperature: 0,
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text().catch(() => '')}`);
+    const json = await response.json() as any;
+    const toolCalls = json?.choices?.[0]?.message?.tool_calls;
+    checks.push({
+      id: 'tools',
+      label: '工具调用',
+      status: Array.isArray(toolCalls) && toolCalls.length > 0 ? 'pass' : 'warn',
+      message: Array.isArray(toolCalls) && toolCalls.length > 0 ? '支持 tool calling。' : '请求成功，但模型未主动调用诊断工具。',
+    });
+    const reasoning = json?.choices?.[0]?.message?.reasoning_content;
+    checks.push({ id: 'reasoning', label: 'Reasoning', status: reasoning ? 'pass' : 'warn', message: reasoning ? '检测到 reasoning_content。' : '未检测到 reasoning_content。' });
+  } catch (err) {
+    checks.push({ id: 'tools', label: '工具调用', status: 'warn', message: classifyAgentError(err).message });
+  }
+
+  const visionPatterns = ['gpt-4', 'vision', 'vl', 'gemini', 'qwen'];
+  const vision = visionPatterns.some(k => model.toLowerCase().includes(k));
+  checks.push({ id: 'vision', label: 'Vision', status: vision ? 'warn' : 'warn', message: vision ? '按模型名推断可能支持图片，未发送图片实测。' : '按模型名未推断出图片能力。' });
+
+  const hasFail = checks.some(c => c.status === 'fail');
+  const hasWarn = checks.some(c => c.status === 'warn');
+  return {
+    status: hasFail ? 'fail' : hasWarn ? 'warn' : 'pass',
+    summary: hasFail ? '诊断失败。' : hasWarn ? '基础连接通过，但存在兼容性警告。' : '诊断通过。',
+    checks,
+    suggestion: hasWarn ? '如果工具调用或 reasoning 是必须能力，请用真实任务再验证一次。' : undefined,
+  };
 }
 
 function ensurePath(workspaceRoot: string, inputPath: string): string {
@@ -122,31 +292,48 @@ export function setupIpcHandlers(
     abortCtrl: AbortController,
   ) {
     let deltaBuffer = '';
+    let reasoningBuffer = '';
     let flushTimer: ReturnType<typeof setInterval> | null = null;
+    let errorSent = false;
+    let thinkingNotified = false;
     const flushDelta = () => {
+      if (reasoningBuffer) {
+        if (!thinkingNotified) { emitRunStatus(sessionId, { phase: 'thinking' }); thinkingNotified = true; }
+        getWindow()?.webContents.send('agent:thinking-delta', sessionId, reasoningBuffer);
+        reasoningBuffer = '';
+      }
       if (deltaBuffer) {
+        emitRunStatus(sessionId, { phase: 'streaming' });
         getWindow()?.webContents.send('agent:delta', sessionId, deltaBuffer);
         deltaBuffer = '';
       }
     };
 
     try {
+      emitRunStatus(sessionId, { phase: 'starting', startedAt: Date.now(), inputTokens: 0, outputTokens: 0, currentTool: null, lastTool: null, errorCode: null });
       const result = await sessionAgent.runUserTurn(
         message,
         attachments as { type: 'image'; data: string; mimeType: string }[],
         {
+          onModelRequest() {
+            emitRunStatus(sessionId, { phase: 'requesting_model', currentTool: null });
+          },
           onDelta(text) {
-            if (!flushTimer) flushTimer = setInterval(flushDelta, 30);
+            if (!flushTimer) flushTimer = setInterval(flushDelta, 50);
             deltaBuffer += text;
           },
           onReasoning(text) {
-            getWindow()?.webContents.send('agent:thinking-delta', sessionId, text);
+            if (!flushTimer) flushTimer = setInterval(flushDelta, 50);
+            reasoningBuffer += text;
           },
           onToolStart(toolCall) {
+            emitRunStatus(sessionId, { phase: 'tool_running', currentTool: toolCall.name });
             getWindow()?.webContents.send('agent:tool-start', sessionId, toolCall);
           },
           onToolResult(toolCall, result) {
+            emitRunStatus(sessionId, { phase: 'requesting_model', currentTool: null, lastTool: toolCall.name });
             getWindow()?.webContents.send('agent:tool-result', sessionId, {
+              toolCallId: toolCall.id,
               name: toolCall.name,
               argumentsText: toolCall.argumentsText,
               result,
@@ -154,10 +341,16 @@ export function setupIpcHandlers(
           },
           onComplete(step) {
             flushDelta();
+            emitRunStatus(sessionId, { phase: 'finishing', currentTool: null });
             getWindow()?.webContents.send('agent:turn-done', sessionId, step);
           },
           onError(error) {
-            getWindow()?.webContents.send('agent:error', sessionId, error.message);
+            const agentError = classifyAgentError(error);
+            emitRunStatus(sessionId, { phase: agentError.code === 'aborted' ? 'aborted' : 'error', errorCode: agentError.code, currentTool: null });
+            if (agentError.code !== 'aborted') {
+              errorSent = true;
+              getWindow()?.webContents.send('agent:error', sessionId, agentError);
+            }
           },
         },
         abortCtrl.signal,
@@ -171,8 +364,12 @@ export function setupIpcHandlers(
       const isAbort = msg === 'Aborted'
         || (err instanceof Error && err.name === 'AbortError')
         || (typeof DOMException !== 'undefined' && err instanceof DOMException);
-      if (!isAbort) {
-        getWindow()?.webContents.send('agent:error', sessionId, msg);
+      if (isAbort) {
+        emitRunStatus(sessionId, { phase: 'aborted', currentTool: null, errorCode: 'aborted' });
+      } else {
+        const agentError = classifyAgentError(err);
+        emitRunStatus(sessionId, { phase: 'error', currentTool: null, errorCode: agentError.code });
+        if (!errorSent) getWindow()?.webContents.send('agent:error', sessionId, agentError);
       }
       return null;
     }
@@ -201,27 +398,56 @@ export function setupIpcHandlers(
     return abortCtrl;
   }
 
+  function abortCurrentRun(sessionId: string): void {
+    sessionAbortControllers.get(sessionId)?.abort();
+  }
+
+  function newRunController(sessionId: string): AbortController {
+    const ctrl = new AbortController();
+    sessionAbortControllers.set(sessionId, ctrl);
+    return ctrl;
+  }
+
+  async function runAgentTurnSerial(sessionId: string, runFn: (abortCtrl: AbortController) => Promise<unknown>): Promise<unknown> {
+    abortCurrentRun(sessionId);
+    const prev = sessionRunningTurns.get(sessionId);
+    if (prev) await prev.catch(() => {});
+    const abortCtrl = newRunController(sessionId);
+    const promise = runFn(abortCtrl);
+    sessionRunningTurns.set(sessionId, promise);
+    try {
+      return await promise;
+    } finally {
+      if (sessionRunningTurns.get(sessionId) === promise) {
+        sessionRunningTurns.delete(sessionId);
+      }
+    }
+  }
+
   ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
-    const p = getProvider();
-    if (!p) throw new Error('No provider configured');
-    const abortCtrl = abortPreviousRun(sessionId);
-    const sessionAgent = getOrCreateSessionAgent(sessionId);
-    return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
+    return runAgentTurnSerial(sessionId, async (abortCtrl) => {
+      const p = getProvider();
+      if (!p) throw new Error('No provider configured');
+      const sessionAgent = getOrCreateSessionAgent(sessionId);
+      return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
+    });
   });
 
   ipcMain.handle('agent:regenerate', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
-    const p = getProvider();
-    if (!p) throw new Error('No provider configured');
-    const abortCtrl = abortPreviousRun(sessionId);
-    const sessionAgent = getOrCreateSessionAgent(sessionId);
-    sessionAgent.removeLastUserTurn();
-    return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
+    return runAgentTurnSerial(sessionId, async (abortCtrl) => {
+      const p = getProvider();
+      if (!p) throw new Error('No provider configured');
+      const sessionAgent = getOrCreateSessionAgent(sessionId);
+      sessionAgent.removeLastUserTurn();
+      return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
+    });
   });
 
   ipcMain.handle('agent:abort', (_event, sessionId: string) => {
     sessionAbortControllers.get(sessionId)?.abort();
     sessionAbortControllers.delete(sessionId);
     cancelPendingInteractionsForSession(sessionId, 'Session aborted');
+    emitRunStatus(sessionId, { phase: 'aborted', currentTool: null, errorCode: 'aborted' });
   });
 
   ipcMain.handle('agent:reset', (_event, sessionId: string) => {
@@ -377,6 +603,111 @@ export function setupIpcHandlers(
       cfg.providers.push({ ...pc, models: Array.isArray(pc.models) ? pc.models : [] });
     }
     await saveConfig();
+  });
+
+  ipcMain.handle('provider:test', async (_event, input: ProviderTestConfig) => {
+    const providerName = `${input.providerId || ''} ${input.name || ''}`.toLowerCase();
+    if (providerName.includes('anthropic')) {
+      return {
+        status: 'warn',
+        summary: 'Anthropic 诊断第一版仅检查配置完整性。',
+        checks: [
+          { id: 'api_key', label: 'API Key', status: input.apiKey?.trim() ? 'pass' : 'fail', message: input.apiKey?.trim() ? '已填写。' : 'API Key 为空。' },
+          { id: 'model', label: '模型', status: input.model?.trim() ? 'pass' : 'fail', message: input.model?.trim() ? input.model : '模型名为空。' },
+          { id: 'compat', label: '兼容性', status: 'warn', message: '当前版本的深度诊断优先覆盖 OpenAI-compatible Provider。Anthropic 可通过真实会话验证。' },
+        ],
+        suggestion: '如果需要 Anthropic 深度诊断，后续可单独接入 Messages API 探测。',
+      } satisfies ProviderTestResult;
+    }
+    const result = await testOpenAICompatibleProvider(input);
+
+    // Try balance probe
+    if (input.apiKey?.trim()) {
+      const apiKey = input.apiKey.trim();
+      const baseUrl = normalizeOpenAIBaseUrl(input.baseUrl || '');
+      const balanceEndpoints = [
+        `${baseUrl}/user/info`,
+        `${baseUrl}/user/balance`,
+      ];
+      // Also try known provider-specific endpoints
+      if (!baseUrl.includes('deepseek.com')) balanceEndpoints.push('https://api.deepseek.com/user/balance');
+
+      for (const url of balanceEndpoints) {
+        try {
+          const resp = await fetch(url, {
+            headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}` },
+          });
+          if (!resp.ok) continue;
+          const data = await resp.json() as Record<string, any>;
+          // DeepSeek format
+          if (data?.balance_infos?.[0]) {
+            const b = data.balance_infos[0];
+            result.balance = {
+              total: b.total_balance || '0',
+              toppedUp: b.topped_up_balance,
+              granted: b.granted_balance,
+              currency: b.currency || 'CNY',
+            };
+            break;
+          }
+          // SiliconFlow / generic format
+          if (data?.data?.totalBalance) {
+            result.balance = {
+              total: data.data.totalBalance,
+              toppedUp: data.data.chargeBalance,
+              granted: data.data.balance,
+              currency: 'CNY',
+            };
+            break;
+          }
+          // Unknown but has total_balance
+          if (data?.total_balance) {
+            result.balance = { total: data.total_balance, currency: 'CNY' };
+            break;
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    return result;
+  });
+
+  // ---- Balance ----
+  ipcMain.handle('balance:query', async (_event, providerId: string) => {
+    const provider = getConfig().providers.find(p => p.id === providerId);
+    if (!provider?.apiKey) return { error: 'API Key 未配置' };
+    const apiKey = provider.apiKey;
+    try {
+      let url: string;
+      if (providerId === 'deepseek') {
+        url = 'https://api.deepseek.com/user/balance';
+      } else if (providerId === 'siliconflow' || (provider.name && /硅基|silicon/i.test(provider.name))) {
+        url = 'https://api.siliconflow.cn/v1/user/info';
+      } else {
+        return { error: '不支持的供应商' };
+      }
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}` },
+      });
+      if (!response.ok) return { error: `HTTP ${response.status}` };
+      const raw = await response.json() as Record<string, any>;
+      if (providerId === 'deepseek') {
+        return raw;
+      }
+      if (raw?.data) {
+        return {
+          balance_infos: [{
+            currency: 'CNY',
+            total_balance: raw.data.totalBalance || raw.data.balance || '0',
+            granted_balance: raw.data.balance || '0',
+            topped_up_balance: raw.data.chargeBalance || '0',
+          }],
+        };
+      }
+      return raw;
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   // Permission mode

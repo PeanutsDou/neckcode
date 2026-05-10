@@ -4,6 +4,7 @@ import { exec as execCb, execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import type { ToolDefinition, ToolCall } from '../agent/types';
 import type { ToolRegistry } from '../agent/runtime';
+import type { ConfirmRequest, RiskLevel } from '../../shared/types';
 import { webFetch } from './web-fetch';
 import { webSearch } from './web-search';
 import { taskHandlers } from './task-tools';
@@ -33,23 +34,52 @@ function safeJson(input: string): Record<string, unknown> {
   return JSON.parse(input);
 }
 
-function describeToolAction(toolName: string, args: Record<string, unknown>): string {
+function isHighRiskShell(command: string): boolean {
+  return /\b(rm|del|rmdir)\b/i.test(command)
+    || /\bgit\s+(reset|clean)\b/i.test(command)
+    || /invoke-webrequest[\s\S]*\|\s*iex/i.test(command)
+    || /\b(curl|wget)\b[\s\S]*\|\s*(sh|bash|powershell|pwsh|iex)\b/i.test(command);
+}
+
+function riskForTool(toolName: string, args: Record<string, unknown>): RiskLevel {
+  if (toolName === 'delete_file') return 'high';
+  if (toolName === 'run_shell') return isHighRiskShell(String(args.command || '')) ? 'high' : 'medium';
+  if (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'notebook_edit') return 'medium';
+  return 'low';
+}
+
+function describeToolAction(toolName: string, args: Record<string, unknown>, workspaceRoot: string): ConfirmRequest {
+  const paths = [args.path, args.notebook_path, args.notebookPath]
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+  const command = toolName === 'run_shell' ? String(args.command || '') : undefined;
+  const warnings: string[] = [];
+  if (toolName === 'delete_file') warnings.push('该操作会删除文件。');
+  if (command && isHighRiskShell(command)) warnings.push('命令包含删除、重置、远程脚本执行等高风险片段。');
+
   if (toolName === 'run_shell') {
-    return `运行命令：${String(args.command || '').slice(0, 500)}`;
+    return {
+      toolName,
+      riskLevel: riskForTool(toolName, args),
+      summary: `运行命令：${String(args.command || '').slice(0, 500)}`,
+      cwd: workspaceRoot,
+      command,
+      warnings,
+      rawArgs: args,
+    };
   }
   if (toolName === 'delete_file') {
-    return `删除文件：${String(args.path || '')}`;
+    return { toolName, riskLevel: 'high', summary: `删除文件：${String(args.path || '')}`, cwd: workspaceRoot, paths, warnings, rawArgs: args };
   }
   if (toolName === 'write_file') {
-    return `写入文件：${String(args.path || '')}`;
+    return { toolName, riskLevel: 'medium', summary: `写入文件：${String(args.path || '')}`, cwd: workspaceRoot, paths, warnings, rawArgs: args };
   }
   if (toolName === 'edit_file') {
-    return `编辑文件：${String(args.path || '')}`;
+    return { toolName, riskLevel: 'medium', summary: `编辑文件：${String(args.path || '')}`, cwd: workspaceRoot, paths, warnings, rawArgs: args };
   }
   if (toolName === 'notebook_edit') {
-    return `编辑 Notebook：${String(args.path || args.notebookPath || '')}`;
+    return { toolName, riskLevel: 'medium', summary: `编辑 Notebook：${String(args.notebook_path || args.path || args.notebookPath || '')}`, cwd: workspaceRoot, paths, warnings, rawArgs: args };
   }
-  return `执行工具：${toolName}`;
+  return { toolName, riskLevel: 'low', summary: `执行工具：${toolName}`, cwd: workspaceRoot, paths, warnings, rawArgs: args };
 }
 
 function commandEscapesWorkspace(command: string, workspaceRoot: string): boolean {
@@ -353,7 +383,7 @@ const CONFIRM_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_sh
 
 export function createToolRegistry(
   workspaceRoot: string,
-  confirmHandler?: (message: string) => Promise<boolean>,
+  confirmHandler?: (request: ConfirmRequest) => Promise<boolean>,
   askHandler?: (questions: Array<{ question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }>) => Promise<Record<string, string>>,
   getPermissionMode?: () => PermissionMode,
 ): ToolRegistry {
@@ -722,10 +752,10 @@ export function createToolRegistry(
         }
 
         if (confirmHandler && needsConfirm(toolCall.name, args)) {
-          const desc = describeToolAction(toolCall.name, args);
+          const desc = describeToolAction(toolCall.name, args, workspaceRoot);
           const approved = await confirmHandler(desc);
           if (!approved) {
-            return `Operation cancelled by user: ${desc}`;
+            return `Operation cancelled by user: ${desc.summary}`;
           }
         }
 

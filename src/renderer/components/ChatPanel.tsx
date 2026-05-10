@@ -1,7 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
+import React, { memo } from 'react';
 import {
   useChatStore,
   useActiveEntries,
@@ -10,77 +7,36 @@ import {
   useActiveRunStartedAt,
   useActiveError,
   useActiveThinkingText,
+  useActiveRunState,
   type ChatEntry,
 } from '../stores/chat-store';
 import { ChatInput } from './ChatInput';
 import { MessageBubble } from './MessageBubble';
-import { MermaidBlock } from './MermaidBlock';
+import { StreamingBubble } from './StreamingBubble';
+import { useIpcListeners } from '../hooks/useIpcListeners';
+import { useScrollToBottom } from '../hooks/useScrollToBottom';
+import { useStreamTimer } from '../hooks/useStreamTimer';
+import { useStreamMetric } from '../hooks/useStreamTokens';
+import type { AgentError } from '../../shared/types';
 
-function estimateTokens(text: string): number {
-  let cjk = 0;
-  let ascii = 0;
-  for (const ch of text) {
-    const code = ch.charCodeAt(0);
-    if (
-      (code >= 0x4E00 && code <= 0x9FFF) ||
-      (code >= 0x3400 && code <= 0x4DBF) ||
-      (code >= 0x3000 && code <= 0x303F) ||
-      (code >= 0xFF00 && code <= 0xFFEF) ||
-      (code >= 0xAC00 && code <= 0xD7AF) ||
-      code > 127
-    ) {
-      cjk++;
-    } else {
-      ascii++;
-    }
-  }
-  return Math.round(cjk * 0.7 + ascii * 0.25);
+/* ── Memoised entry list — skips re-render during streaming ── */
+const EntryList = memo(function EntryList({ entries }: { entries: ChatEntry[] }) {
+  return <>{entries.map(entry => <MessageBubble key={entry.id} entry={entry} />)}</>;
+});
+
+/* ── Error normalisation ── */
+function normalizeError(error: string | AgentError): AgentError {
+  if (typeof error !== 'string') return error;
+  return {
+    code: 'unknown',
+    message: error,
+    suggestion: '请复制错误信息后重试；如果持续出现，检查 Provider 配置和网络连接。',
+    retryable: true,
+    raw: error,
+  };
 }
 
-function estimateCurrentRunTokens(entries: ChatEntry[], streamingText: string, thinkingText: string): number {
-  let start = -1;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].role === 'user') {
-      start = i;
-      break;
-    }
-  }
-
-  const inputEntries = start >= 0 ? entries.slice(start, start + 1) : [];
-  const outputEntries = start >= 0 ? entries.slice(start + 1) : [];
-  let text = '';
-
-  for (const entry of inputEntries) {
-    text += entry.content;
-    text += entry.toolArgs || '';
-    text += entry.toolResult || '';
-  }
-
-  for (const entry of outputEntries) {
-    if (entry.role === 'assistant') text += entry.content;
-    if (entry.role === 'tool') {
-      text += entry.toolArgs || '';
-      text += entry.toolResult || entry.content || '';
-    }
-  }
-
-  text += streamingText;
-  text += thinkingText;
-  return estimateTokens(text);
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
-}
-
-function fmtTime(sec: number): string {
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}m ${s}s`;
-}
-
+/* ── ChatPanel ── */
 export function ChatPanel() {
   const store = useChatStore;
   const entries = useActiveEntries();
@@ -88,109 +44,37 @@ export function ChatPanel() {
   const thinkingText = useActiveThinkingText();
   const isStreaming = useActiveIsStreaming();
   const runStartedAt = useActiveRunStartedAt();
+  const runState = useActiveRunState();
   const error = useActiveError();
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const wasStreaming = useRef(false);
-  const userScrolledUp = useRef(false);
-  const [elapsed, setElapsed] = useState(0);
+  const activeId = useChatStore(s => s.activeId);
 
-  // Detect user manually scrolling away from the bottom
-  useEffect(() => {
-    const container = bottomRef.current?.parentElement;
-    if (!container) return;
+  // ── hooks ──
+  useIpcListeners();
+  const bottomRef = useScrollToBottom({ entries, streamingText, thinkingText, isStreaming });
+  const elapsed = useStreamTimer(isStreaming, runStartedAt);
+  const streamMetric = useStreamMetric(entries, streamingText, thinkingText, isStreaming, runState, elapsed);
 
-    const handleWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) {
-        userScrolledUp.current = true;
-      } else if (e.deltaY > 0) {
-        const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (dist < 5) userScrolledUp.current = false;
-      }
-    };
-    container.addEventListener('wheel', handleWheel, { passive: true });
-    return () => container.removeEventListener('wheel', handleWheel);
-  }, []);
-
-  useEffect(() => {
-    const api = window.electronAPI;
-    if (!api) return;
-
-    const unsubs: Array<() => void> = [];
-
-    unsubs.push(api.onDelta((sid, text) => {
-      store.getState().appendDeltaTo(sid, text);
+  // ── callbacks ──
+  const retryLast = () => {
+    const state = store.getState();
+    const sid = state.activeId;
+    if (!sid) return;
+    const ses = state.sessions[sid];
+    const lastUser = [...(ses?.entries || [])].reverse().find(e => e.role === 'user');
+    if (!lastUser) return;
+    const attachments = lastUser.attachments?.map(a => ({
+      type: a.type, data: a.data, mimeType: a.type === 'image' ? 'image/png' : 'text/plain',
     }));
-    unsubs.push(api.onThinkingDelta((sid, text) => {
-      store.getState().appendThinkingDeltaTo(sid, text);
-    }));
-    unsubs.push(api.onToolStart((sid, data: any) => {
-      store.getState().addEntryTo(sid, {
-        id: `tool_${Date.now()}`,
-        role: 'tool',
-        content: '',
-        toolName: data.name,
-        toolArgs: data.argumentsText,
-        timestamp: Date.now(),
-      });
-    }));
-    unsubs.push(api.onToolResult((sid, data: any) => {
-      const state = store.getState();
-      const ses = state.sessions[sid];
-      if (ses) {
-        const entries = [...ses.entries];
-        for (let i = entries.length - 1; i >= 0; i--) {
-          if (entries[i].role === 'tool' && entries[i].toolName === data.name && !entries[i].toolResult) {
-            entries[i] = { ...entries[i], content: data.result, toolResult: data.result };
-            break;
-          }
-        }
-        store.setState({ sessions: { ...state.sessions, [sid]: { ...ses, entries } } });
-      }
-    }));
-    unsubs.push(api.onTurnDone((sid, data: any) => {
-      store.getState().finishStreamTo(sid, data.text);
-    }));
-    unsubs.push(api.onError((sid, msg) => {
-      store.getState().setErrorTo(sid, msg);
-    }));
+    state.setErrorTo(sid, null);
+    state.setStreamingTo(sid, true);
+    window.electronAPI?.sendMessage(sid, lastUser.content, attachments as any).catch(err => {
+      store.getState().setErrorTo(sid, err instanceof Error ? err.message : String(err));
+    });
+  };
 
-    return () => { unsubs.forEach(fn => fn()); };
-  }, []);
+  const openSettings = () => window.dispatchEvent(new CustomEvent('open-settings'));
 
-  useEffect(() => {
-    if (!isStreaming || !runStartedAt) {
-      setElapsed(0);
-      return;
-    }
-
-    const updateElapsed = () => setElapsed(Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000)));
-    updateElapsed();
-    const timer = setInterval(updateElapsed, 1000);
-    return () => clearInterval(timer);
-  }, [isStreaming, runStartedAt]);
-
-  const tokens = isStreaming ? estimateCurrentRunTokens(entries, streamingText, thinkingText) : 0;
-  const isThinking = isStreaming && thinkingText.length > 0 && streamingText.length === 0;
-  const thinkingLabel = isThinking ? ' 正在思考' : '';
-  const streamMetric = `${fmtTime(elapsed)} · ↓ ${fmtTokens(tokens)} tokens${thinkingLabel}`;
-
-  useEffect(() => {
-    const container = bottomRef.current?.parentElement;
-    if (!container) return;
-    // Always scroll when a new run starts (user just sent a message)
-    const runJustStarted = isStreaming && !wasStreaming.current;
-    wasStreaming.current = isStreaming;
-    if (runJustStarted) {
-      userScrolledUp.current = false;
-      bottomRef.current?.scrollIntoView({ behavior: 'auto' });
-      return;
-    }
-    // During streaming: only auto-scroll if user hasn't manually scrolled up
-    if (isStreaming && userScrolledUp.current) return;
-    // When stream finishes or user is following: scroll to bottom
-    bottomRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
-  }, [entries, streamingText, thinkingText, isStreaming]);
-
+  // ── render ──
   return (
     <div className="chat-panel">
       <div className="chat-messages">
@@ -201,52 +85,31 @@ export function ChatPanel() {
           </div>
         )}
 
-        {entries.map(entry => (
-          <MessageBubble key={entry.id} entry={entry} />
-        ))}
+        <EntryList entries={entries} />
 
-        {isStreaming && streamingText && (
-          <div className="message message-assistant streaming">
-            <div className="streaming-head">
-              <span className="streaming-spark" />
-              <div className="streaming-status">{streamMetric}</div>
-            </div>
-            <div className="message-content">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkBreaks]}
-                components={{
-                  code({ className, children, ...props }) {
-                    const match = /language-(\w+)/.exec(className || '');
-                    const lang = match?.[1];
-                    const code = String(children).replace(/\n$/, '');
-                    if (lang === 'mermaid') {
-                      return <MermaidBlock code={code} />;
-                    }
-                    if (className) {
-                      return <pre><code className={className} {...props}>{children}</code></pre>;
-                    }
-                    return <code {...props}>{children}</code>;
-                  },
-                }}
-              >
-                {streamingText}
-              </ReactMarkdown>
-            </div>
-          </div>
-        )}
-
-        {isStreaming && !streamingText && (
-          <div className="message message-assistant streaming">
-            <div className="streaming-head">
-              <span className="streaming-spark" />
-              <div className="streaming-status">{streamMetric}</div>
-            </div>
-          </div>
+        {isStreaming && (
+          <StreamingBubble sessionId={activeId || 'default'} streamMetric={streamMetric} />
         )}
 
         {error && (
           <div className="message message-system error">
-            <div className="message-content">Error: {error}</div>
+            {(() => {
+              const normalized = normalizeError(error);
+              return (
+                <div className="message-content">
+                  <strong>Error: {normalized.code}</strong>
+                  <p>{normalized.message}</p>
+                  <p className="error-suggestion">{normalized.suggestion}</p>
+                  <div className="error-actions">
+                    {normalized.retryable && <button className="settings-btn-sm" onClick={retryLast}>重试</button>}
+                    {(normalized.code === 'auth_error' || normalized.code === 'model_not_found') && (
+                      <button className="settings-btn-sm" onClick={openSettings}>打开设置</button>
+                    )}
+                    <button className="settings-btn-sm" onClick={() => navigator.clipboard.writeText(normalized.raw || normalized.message)}>复制错误</button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 

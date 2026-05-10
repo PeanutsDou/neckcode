@@ -10,6 +10,7 @@ import { AskDialog } from './components/AskDialog';
 import { SkillsDialog } from './components/SkillsDialog';
 import { MemoryDialog } from './components/MemoryDialog';
 import { WorkspaceBar } from './components/WorkspaceBar';
+import { ImageViewer } from './components/ImageViewer';
 import { ResizeHandle } from './components/ResizeHandle';
 import { useAppStore } from './stores/app-store';
 import { LIGHT_SCHEMES, normalizeLightScheme, type LightSchemeId } from './theme-schemes';
@@ -54,6 +55,7 @@ export default function App() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [codeLeftWidth, setCodeLeftWidth] = useState(() => 280);
   const handleCodeResize = (delta: number) => {
     setCodeLeftWidth(prev => {
@@ -99,6 +101,12 @@ export default function App() {
     document.documentElement.style.setProperty('--font-scale', `${fontScale / 100}`);
   }, [fontScale]);
 
+  useEffect(() => {
+    const openSettings = () => setSettingsOpen(true);
+    window.addEventListener('open-settings', openSettings);
+    return () => window.removeEventListener('open-settings', openSettings);
+  }, []);
+
   // Load config-driven state
   useEffect(() => {
     const loadConfig = () => {
@@ -114,6 +122,7 @@ export default function App() {
     loadConfig();
     const handler = () => loadConfig();
     window.addEventListener('providers-changed', handler);
+    window.addEventListener('open-image-viewer', ((e: CustomEvent) => setViewerSrc(e.detail)) as EventListener);
     return () => window.removeEventListener('providers-changed', handler);
   }, []);
 
@@ -259,6 +268,7 @@ export default function App() {
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <SkillsDialog open={skillsOpen} onClose={() => setSkillsOpen(false)} />
         <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+        <ImageViewer open={!!viewerSrc} src={viewerSrc || ''} onClose={() => setViewerSrc(null)} />
         <AskDialog />
       </div>
     </ErrorBoundary>

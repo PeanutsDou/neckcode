@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { AgentError, AgentErrorCode, RunState, RunStatusEvent } from '../../shared/types';
 
 export interface ChatEntry {
   id: string;
@@ -8,6 +9,7 @@ export interface ChatEntry {
   toolName?: string;
   toolArgs?: string;
   toolResult?: string;
+  toolCallId?: string;
   timestamp: number;
 }
 
@@ -16,9 +18,10 @@ export interface SessionState {
   isStreaming: boolean;
   streamingText: string;
   thinkingText: string;
-  error: string | null;
+  error: string | AgentError | null;
   pendingContext: string | null;
   runStartedAt: number | null;
+  runState: RunState;
 }
 
 export type SessionStatus = 'idle' | 'running' | 'error';
@@ -32,7 +35,7 @@ interface ChatState {
   appendDelta: (text: string) => void;
   finishStream: (text: string) => void;
   setStreaming: (v: boolean) => void;
-  setError: (msg: string | null) => void;
+  setError: (msg: string | AgentError | null) => void;
   setPendingContext: (text: string | null) => void;
   triggerFocus: () => void;
 
@@ -41,7 +44,9 @@ interface ChatState {
   appendThinkingDeltaTo: (sid: string, text: string) => void;
   finishStreamTo: (sid: string, text: string) => void;
   setStreamingTo: (sid: string, v: boolean) => void;
-  setErrorTo: (sid: string, msg: string | null) => void;
+  setErrorTo: (sid: string, msg: string | AgentError | null) => void;
+  setRunStatusTo: (sid: string, status: RunStatusEvent) => void;
+  setRunTokensTo: (sid: string, inputTokens: number, outputTokens: number) => void;
   trimEntriesFrom: (sid: string, fromIndex: number) => void;
 
   ensureActiveSession: () => string;
@@ -52,8 +57,23 @@ interface ChatState {
   clearActive: () => void;
 }
 
+function emptyRunState(): RunState {
+  return {
+    phase: 'idle',
+    startedAt: null,
+    lastEventAt: null,
+    currentTool: null,
+    lastTool: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    errorCode: null,
+  };
+}
+
+const EMPTY_RUN_STATE = emptyRunState();
+
 function emptySession(): SessionState {
-  return { entries: [], isStreaming: false, streamingText: '', thinkingText: '', error: null, pendingContext: null, runStartedAt: null };
+  return { entries: [], isStreaming: false, streamingText: '', thinkingText: '', error: null, pendingContext: null, runStartedAt: null, runState: emptyRunState() };
 }
 
 function updateSession(
@@ -77,6 +97,8 @@ function createSessionId(): string {
 
 export function getSessionStatus(session?: SessionState): SessionStatus {
   if (!session) return 'idle';
+  if (session.runState.phase === 'error') return 'error';
+  if (['starting', 'requesting_model', 'thinking', 'streaming', 'tool_running', 'waiting_user', 'finishing'].includes(session.runState.phase)) return 'running';
   if (session.error) return 'error';
   if (session.isStreaming) return 'running';
   return 'idle';
@@ -145,6 +167,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         thinkingText: '',
         isStreaming: false,
         runStartedAt: null,
+        runState: { ...s.runState, phase: 'idle', currentTool: null, lastEventAt: Date.now() },
       }));
     });
     // Auto-focus input after response
@@ -159,11 +182,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       thinkingText: v ? '' : ses.thinkingText,
       error: v ? null : ses.error,
       runStartedAt: v ? (ses.runStartedAt || Date.now()) : null,
+      runState: v ? { ...emptyRunState(), phase: 'starting', startedAt: Date.now(), lastEventAt: Date.now() } : { ...ses.runState, phase: 'idle', currentTool: null, lastEventAt: Date.now() },
     })));
   },
 
   setError(msg) {
-    set(state => updateSession(state, state.activeId || 'default', ses => ({ ...ses, error: msg, isStreaming: false, runStartedAt: null })));
+    set(state => updateSession(state, state.activeId || 'default', ses => ({
+      ...ses,
+      error: msg,
+      isStreaming: false,
+      runStartedAt: null,
+      runState: { ...ses.runState, phase: msg ? 'error' : 'idle', currentTool: null, lastEventAt: Date.now() },
+    })));
   },
 
   setPendingContext(text) {
@@ -175,7 +205,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   addEntryTo(sid, entry) {
-    set(state => updateSession(state, sid, ses => ({ ...ses, entries: [...ses.entries, entry], error: null })));
+    set(state => {
+      const ses = state.sessions[sid] || emptySession();
+      const entries = [...ses.entries, entry];
+      if (entry.role === 'user') autoSave(sid, entries);
+      return updateSession(state, sid, s => ({ ...s, entries, error: null }));
+    });
   },
 
   appendDeltaTo(sid, text) {
@@ -203,6 +238,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isStreaming: false,
         error: null,
         runStartedAt: null,
+        runState: { ...s.runState, phase: 'idle', currentTool: null, lastEventAt: Date.now() },
       }));
     });
     set(s => ({ focusVersion: s.focusVersion + 1 }));
@@ -216,11 +252,56 @@ export const useChatStore = create<ChatState>((set, get) => ({
       thinkingText: v ? '' : ses.thinkingText,
       error: v ? null : ses.error,
       runStartedAt: v ? (ses.runStartedAt || Date.now()) : null,
+      runState: v ? { ...emptyRunState(), phase: 'starting', startedAt: Date.now(), lastEventAt: Date.now() } : { ...ses.runState, phase: 'idle', currentTool: null, lastEventAt: Date.now() },
     })));
   },
 
   setErrorTo(sid, msg) {
-    set(state => updateSession(state, sid, ses => ({ ...ses, error: msg, isStreaming: false, runStartedAt: null })));
+    set(state => {
+      const ses = state.sessions[sid] || emptySession();
+      autoSave(sid, ses.entries);
+      const errorCode = typeof msg === 'object' && msg ? msg.code : undefined;
+      return updateSession(state, sid, s => ({
+        ...s,
+        error: msg,
+        isStreaming: false,
+        runStartedAt: null,
+        runState: { ...s.runState, phase: msg ? 'error' : 'idle', currentTool: null, errorCode: (msg ? errorCode : null) as AgentErrorCode | null | undefined, lastEventAt: Date.now() },
+      }));
+    });
+  },
+
+  setRunStatusTo(sid, status) {
+    set(state => updateSession(state, sid, ses => {
+      const startedAt = status.startedAt !== undefined
+        ? status.startedAt
+        : ses.runState.startedAt || (status.phase === 'starting' ? Date.now() : null);
+      const running = ['starting', 'requesting_model', 'thinking', 'streaming', 'tool_running', 'waiting_user', 'finishing'].includes(status.phase);
+      return {
+        ...ses,
+        isStreaming: running,
+        runStartedAt: running ? (ses.runStartedAt || startedAt || Date.now()) : null,
+        error: status.phase === 'starting' ? null : ses.error,
+        runState: {
+          ...ses.runState,
+          ...status,
+          startedAt,
+          lastEventAt: status.lastEventAt || Date.now(),
+          inputTokens: status.inputTokens ?? ses.runState.inputTokens,
+          outputTokens: status.outputTokens ?? ses.runState.outputTokens,
+          phase: status.phase,
+        },
+      };
+    }));
+  },
+
+  setRunTokensTo(sid, inputTokens, outputTokens) {
+    set(state => updateSession(state, sid, ses => ({
+      ...ses,
+      runState: ses.runState.inputTokens === inputTokens && ses.runState.outputTokens === outputTokens
+        ? ses.runState
+        : { ...ses.runState, inputTokens, outputTokens, lastEventAt: Date.now() },
+    })));
   },
 
   trimEntriesFrom(sid, fromIndex) {
@@ -335,7 +416,7 @@ export function useActiveRunStartedAt(): number | null {
   });
 }
 
-export function useActiveError(): string | null {
+export function useActiveError(): string | AgentError | null {
   return useChatStore(s => {
     const id = s.activeId;
     if (!id) return null;
@@ -350,6 +431,15 @@ export function useActiveThinkingText(): string {
     if (!id) return '';
     const ses = s.sessions[id];
     return ses ? ses.thinkingText : '';
+  });
+}
+
+export function useActiveRunState(): RunState {
+  return useChatStore(s => {
+    const id = s.activeId;
+    if (!id) return EMPTY_RUN_STATE;
+    const ses = s.sessions[id];
+    return ses ? ses.runState : EMPTY_RUN_STATE;
   });
 }
 

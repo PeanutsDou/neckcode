@@ -108,7 +108,7 @@ export function MessageBubble({ entry }: Props) {
         {entry.attachments && entry.attachments.length > 0 && (
           <div className="message-attachments">
             {entry.attachments.map((att, i) => (
-              <img key={i} src={att.data} alt={att.name} className="message-attachment-img" />
+              <img key={i} src={att.data} alt={att.name} className="message-attachment-img" onClick={() => window.dispatchEvent(new CustomEvent('open-image-viewer', { detail: att.data }))} />
             ))}
           </div>
         )}

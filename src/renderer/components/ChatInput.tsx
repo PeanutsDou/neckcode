@@ -151,11 +151,6 @@ export function ChatInput() {
 
   const handleSend = async () => {
     if (!canSend) return;
-    // If running, abort current task first, then send new message
-    if (isStreaming) {
-      const sid = getSessionId() || '';
-      await window.electronAPI.abort(sid);
-    }
     if (showCommands && filteredCommands.length > 0 && text.trim() === filteredCommands[commandIdx]?.name) {
       executeCommand(filteredCommands[commandIdx]);
       return;

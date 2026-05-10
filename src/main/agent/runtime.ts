@@ -77,6 +77,7 @@ export class AgentRuntime {
           throw new Error('Aborted');
         }
 
+        callbacks.onModelRequest?.();
         const step = await this.provider.runStep({
           messages: this.session.toMessages(),
           tools: this.tools.getDefinitions(),

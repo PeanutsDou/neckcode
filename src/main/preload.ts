@@ -40,8 +40,13 @@ const api = {
     ipcRenderer.on('agent:turn-done', listener);
     return () => { ipcRenderer.removeListener('agent:turn-done', listener); };
   },
-  onError: (cb: (sid: string, msg: string) => void) => {
-    const listener = (_event: unknown, sid: string, msg: string) => cb(sid, msg);
+  onRunStatus: (cb: (sid: string, status: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, status: unknown) => cb(sid, status);
+    ipcRenderer.on('agent:run-status', listener);
+    return () => { ipcRenderer.removeListener('agent:run-status', listener); };
+  },
+  onError: (cb: (sid: string, error: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, error: unknown) => cb(sid, error);
     ipcRenderer.on('agent:error', listener);
     return () => { ipcRenderer.removeListener('agent:error', listener); };
   },
@@ -52,6 +57,9 @@ const api = {
   getProviders: () => ipcRenderer.invoke('config:get-providers'),
   setProvider: (pc: unknown) => ipcRenderer.invoke('config:set-provider', pc),
   deleteProvider: (id: string) => ipcRenderer.invoke('config:delete-provider', id),
+  testProvider: (config: unknown) => ipcRenderer.invoke('provider:test', config),
+  getDeepSeekBalance: () => ipcRenderer.invoke('balance:query', 'deepseek'),
+  getProviderBalance: (providerId: string) => ipcRenderer.invoke('balance:query', providerId),
 
   // File system (direct, not through agent)
   listDir: (dirPath: string) => ipcRenderer.invoke('fs:list-dir', dirPath),
@@ -101,8 +109,8 @@ const api = {
   respondToAsk: (askId: string, answers: Record<string, string> | null) => {
     return ipcRenderer.invoke('ask:respond', askId, answers);
   },
-  onConfirmShow: (cb: (sessionId: string, confirmId: string, message: string) => void) => {
-    const listener = (_: unknown, sessionId: string, confirmId: string, message: string) => cb(sessionId, confirmId, message);
+  onConfirmShow: (cb: (sessionId: string, confirmId: string, request: unknown) => void) => {
+    const listener = (_: unknown, sessionId: string, confirmId: string, request: unknown) => cb(sessionId, confirmId, request);
     ipcRenderer.on('confirm:show', listener);
     return () => { ipcRenderer.removeListener('confirm:show', listener); };
   },

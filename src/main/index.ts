@@ -8,6 +8,7 @@ import { loadConfig, saveConfig, getConfig, getActiveProvider, getModelConfig } 
 import { loadSkills } from './skills/loader';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
+import type { ConfirmRequest } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -45,14 +46,19 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
     const { getPermissionMode, pendingConfirms } = require('./ipc-handlers');
     registry = createToolRegistry(
       getConfig().agent.workspaceRoot,
-      async (message: string) => {
+      async (request: ConfirmRequest) => {
         if (!mainWindow) return false;
         return new Promise((resolve, reject) => {
           const win = BrowserWindow.getAllWindows()[0];
           if (!win) { reject(new Error('No window')); return; }
           const confirmId = `confirm_${Date.now()}_${Math.random().toString(36).slice(2)}`;
           pendingConfirms.set(confirmId, { sessionId, resolve, reject });
-          win.webContents.send('confirm:show', sessionId, confirmId, message);
+          win.webContents.send('agent:run-status', sessionId, {
+            phase: 'waiting_user',
+            lastEventAt: Date.now(),
+            currentTool: request.toolName,
+          });
+          win.webContents.send('confirm:show', sessionId, confirmId, request);
         });
       },
       async (questions) => {
@@ -65,6 +71,11 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
           // Register the pending promise via a module-level store
           const { pendingAsks } = require('./ipc-handlers');
           pendingAsks.set(askId, { sessionId, resolve, reject });
+          win.webContents.send('agent:run-status', sessionId, {
+            phase: 'waiting_user',
+            lastEventAt: Date.now(),
+            currentTool: 'ask_user_question',
+          });
           win.webContents.send('ask:show', sessionId, askId, questions);
         });
       },

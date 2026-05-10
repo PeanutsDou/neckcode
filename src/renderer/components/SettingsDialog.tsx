@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import type { ProviderTestResult } from '../../shared/types';
 
 interface Props {
   open: boolean;
@@ -30,6 +31,8 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [newModelCtx, setNewModelCtx] = useState(0);
   const [newModelMax, setNewModelMax] = useState(32768);
   const [editingModelIdx, setEditingModelIdx] = useState<number | null>(null);
+  const [testingProvider, setTestingProvider] = useState(false);
+  const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -60,6 +63,7 @@ export function SettingsDialog({ open, onClose }: Props) {
     setEditModels(models);
     setAddingModel(false);
     setEditingModelIdx(null);
+    setProviderTest(null);
   };
 
   const startNew = () => {
@@ -70,6 +74,7 @@ export function SettingsDialog({ open, onClose }: Props) {
     setEditModels([]);
     setAddingModel(false);
     setEditingModelIdx(null);
+    setProviderTest(null);
   };
 
   const cancelEdit = () => { setEditingId(null); };
@@ -137,6 +142,30 @@ export function SettingsDialog({ open, onClose }: Props) {
     setEditingId(null);
     loadConfig();
     window.dispatchEvent(new CustomEvent('providers-changed'));
+  };
+
+  const testProvider = async () => {
+    const model = editModels[0]?.name || newModelName.trim();
+    setTestingProvider(true);
+    setProviderTest(null);
+    try {
+      const result = await window.electronAPI.testProvider({
+        providerId: editingId === '__new__' ? undefined : editingId || undefined,
+        name: editName.trim(),
+        baseUrl: editBaseUrl.trim(),
+        apiKey: editApiKey.trim(),
+        model,
+      });
+      setProviderTest(result);
+    } catch (err) {
+      setProviderTest({
+        status: 'fail',
+        summary: '诊断请求失败。',
+        checks: [{ id: 'runtime', label: '运行时', status: 'fail', message: err instanceof Error ? err.message : String(err) }],
+      });
+    } finally {
+      setTestingProvider(false);
+    }
   };
 
   const deleteProvider = async (id: string) => {
@@ -234,8 +263,49 @@ export function SettingsDialog({ open, onClose }: Props) {
 
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                   <button className="btn btn-send" onClick={saveProvider}>保存</button>
+                  <button className="settings-btn-sm" onClick={testProvider} disabled={testingProvider || editModels.length === 0}>
+                    {testingProvider ? '诊断中...' : '诊断'}
+                  </button>
                   <button className="settings-btn-sm" onClick={cancelEdit}>取消</button>
                 </div>
+                {providerTest && (
+                  <div className={`provider-test provider-test-${providerTest.status}`}>
+                    <div className="provider-test-summary">{providerTest.summary}</div>
+                    {providerTest.checks.map(check => (
+                      <div key={check.id} className={`provider-test-check provider-test-check-${check.status}`}>
+                        <span>{check.label}</span>
+                        <strong>{check.status === 'pass' ? '通过' : check.status === 'warn' ? '警告' : '失败'}</strong>
+                        <em>{check.message}</em>
+                      </div>
+                    ))}
+                    {providerTest.balance && (
+                      <div className="balance-card" style={{ marginTop: 10 }}>
+                        <div className="balance-card-header">
+                          <span>💰 账户余额</span>
+                        </div>
+                        <div className="balance-info">
+                          <div className="balance-row">
+                            <span>总余额</span>
+                            <strong>{providerTest.balance.total} {providerTest.balance.currency}</strong>
+                          </div>
+                          {providerTest.balance.toppedUp && (
+                            <div className="balance-row">
+                              <span>充值余额</span>
+                              <span>{providerTest.balance.toppedUp}</span>
+                            </div>
+                          )}
+                          {providerTest.balance.granted && (
+                            <div className="balance-row">
+                              <span>赠送余额</span>
+                              <span>{providerTest.balance.granted}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {providerTest.suggestion && <div className="provider-test-suggestion">{providerTest.suggestion}</div>}
+                  </div>
+                )}
               </div>
             )}
           </div>

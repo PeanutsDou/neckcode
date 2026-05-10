@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import type { ConfirmRequest, RiskLevel } from '../../shared/types';
 
 interface Question {
   question: string;
@@ -16,8 +17,19 @@ interface AskState {
 interface ConfirmState {
   sessionId: string;
   confirmId: string;
-  message: string;
+  request: string | ConfirmRequest;
 }
+
+function normalizeConfirm(request: string | ConfirmRequest): ConfirmRequest {
+  if (typeof request !== 'string') return request;
+  return { toolName: 'unknown', riskLevel: 'medium', summary: request, rawArgs: {} };
+}
+
+const riskLabels: Record<RiskLevel, string> = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+};
 
 export function AskDialog() {
   const [askQueue, setAskQueue] = useState<AskState[]>([]);
@@ -31,8 +43,8 @@ export function AskDialog() {
     const unsubAsk = api?.onAskShow?.((sessionId, askId, questions) => {
       setAskQueue(prev => [...prev, { sessionId, askId, questions: questions as Question[] }]);
     });
-    const unsubConfirm = api?.onConfirmShow?.((sessionId, confirmId, message) => {
-      setConfirmQueue(prev => [...prev, { sessionId, confirmId, message }]);
+    const unsubConfirm = api?.onConfirmShow?.((sessionId, confirmId, request) => {
+      setConfirmQueue(prev => [...prev, { sessionId, confirmId, request }]);
     });
     return () => {
       unsubAsk?.();
@@ -129,11 +141,30 @@ export function AskDialog() {
       )}
       {confirm && (
         <div className="ask-dialog confirm-dialog" onClick={e => e.stopPropagation()}>
-          <div className="ask-question">
-            <div className="ask-question-header">需要确认 · {confirm.sessionId.slice(0, 8)}</div>
-            <div className="ask-question-text">Agent 请求执行以下操作</div>
-            <pre className="confirm-message">{confirm.message}</pre>
-          </div>
+          {(() => {
+            const req = normalizeConfirm(confirm.request);
+            return (
+              <div className="ask-question">
+                <div className="ask-question-header">
+                  需要确认 · {confirm.sessionId.slice(0, 8)}
+                  <span className={`risk-badge risk-${req.riskLevel}`}>{riskLabels[req.riskLevel]}</span>
+                </div>
+                <div className="ask-question-text">{req.summary}</div>
+                <div className="confirm-details">
+                  <div><strong>工具</strong><span>{req.toolName}</span></div>
+                  {req.cwd && <div><strong>目录</strong><span>{req.cwd}</span></div>}
+                  {req.command && <div><strong>命令</strong><code>{req.command}</code></div>}
+                  {req.paths && req.paths.length > 0 && <div><strong>路径</strong><span>{req.paths.join(', ')}</span></div>}
+                </div>
+                {req.warnings && req.warnings.length > 0 && (
+                  <div className="confirm-warnings">
+                    {req.warnings.map(w => <div key={w}>{w}</div>)}
+                  </div>
+                )}
+                {req.rawArgs && <pre className="confirm-message">{JSON.stringify(req.rawArgs, null, 2)}</pre>}
+              </div>
+            );
+          })()}
           <div className="settings-footer">
             <button className="btn" onClick={handleCancel}>取消</button>
             <button className="btn btn-send" onClick={handleConfirm}>允许</button>
