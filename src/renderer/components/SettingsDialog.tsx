@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { ProviderTestResult } from '../../shared/types';
 
 interface Props {
@@ -18,6 +18,13 @@ interface ModelRow {
   maxTokens: number;
 }
 
+interface BalanceInfo {
+  total: string;
+  toppedUp?: string;
+  granted?: string;
+  currency: string;
+}
+
 export function SettingsDialog({ open, onClose }: Props) {
   const [providerList, setProviderList] = useState<ProviderItem[]>([]);
 
@@ -33,6 +40,9 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [editingModelIdx, setEditingModelIdx] = useState<number | null>(null);
   const [testingProvider, setTestingProvider] = useState(false);
   const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
+  const [balance, setBalance] = useState<BalanceInfo | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -64,6 +74,8 @@ export function SettingsDialog({ open, onClose }: Props) {
     setAddingModel(false);
     setEditingModelIdx(null);
     setProviderTest(null);
+    setBalance(null);
+    setBalanceError(null);
   };
 
   const startNew = () => {
@@ -75,6 +87,8 @@ export function SettingsDialog({ open, onClose }: Props) {
     setAddingModel(false);
     setEditingModelIdx(null);
     setProviderTest(null);
+    setBalance(null);
+    setBalanceError(null);
   };
 
   const cancelEdit = () => { setEditingId(null); };
@@ -144,6 +158,38 @@ export function SettingsDialog({ open, onClose }: Props) {
     window.dispatchEvent(new CustomEvent('providers-changed'));
   };
 
+  const fetchBalance = useCallback(async () => {
+    if (!editApiKey.trim() || !editBaseUrl.trim()) return;
+    setBalanceLoading(true);
+    setBalanceError(null);
+    try {
+      const result = await window.electronAPI.testProvider({
+        name: editName.trim(),
+        baseUrl: editBaseUrl.trim(),
+        apiKey: editApiKey.trim(),
+        model: editModels[0]?.name || 'gpt-3.5-turbo',
+      });
+      if (result?.balance) {
+        setBalance(result.balance);
+      } else {
+        setBalanceError('不支持余额查询');
+      }
+    } catch (err) {
+      setBalanceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBalanceLoading(false);
+    }
+  }, [editApiKey, editBaseUrl, editName, editModels]);
+
+  // Auto-fetch balance when switching to a provider
+  useEffect(() => {
+    if (!editingId || editingId === '__new__') return;
+    if (!editApiKey.trim()) return;
+    setBalance(null);
+    setBalanceError(null);
+    fetchBalance();
+  }, [editingId, fetchBalance, editApiKey]);
+
   const testProvider = async () => {
     const model = editModels[0]?.name || newModelName.trim();
     setTestingProvider(true);
@@ -157,6 +203,8 @@ export function SettingsDialog({ open, onClose }: Props) {
         model,
       });
       setProviderTest(result);
+      // Also update balance from test result
+      if (result?.balance) setBalance(result.balance);
     } catch (err) {
       setProviderTest({
         status: 'fail',
@@ -226,6 +274,42 @@ export function SettingsDialog({ open, onClose }: Props) {
                     onChange={e => setEditApiKey(e.target.value)} placeholder="sk-..." />
                 </label>
 
+                {/* Persistent balance card */}
+                {editApiKey.trim() && (
+                  <div className="balance-card">
+                    <div className="balance-card-header">
+                      <span>💰 账户余额</span>
+                      <button className="settings-btn-sm" onClick={fetchBalance} disabled={balanceLoading}>
+                        {balanceLoading ? '查询中...' : '刷新'}
+                      </button>
+                    </div>
+                    {balanceError ? (
+                      <div className="balance-error">{balanceError}</div>
+                    ) : balance ? (
+                      <div className="balance-info">
+                        <div className="balance-row">
+                          <span>总余额</span>
+                          <strong>{balance.total} {balance.currency}</strong>
+                        </div>
+                        {balance.toppedUp && (
+                          <div className="balance-row">
+                            <span>充值余额</span>
+                            <span>{balance.toppedUp}</span>
+                          </div>
+                        )}
+                        {balance.granted && (
+                          <div className="balance-row">
+                            <span>赠送余额</span>
+                            <span>{balance.granted}</span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="balance-loading">加载中...</div>
+                    )}
+                  </div>
+                )}
+
                 <div className="settings-label" style={{ marginTop: 8 }}>模型列表</div>
                 <div className="model-list">
                   {editModels.map((m, i) => (
@@ -278,31 +362,6 @@ export function SettingsDialog({ open, onClose }: Props) {
                         <em>{check.message}</em>
                       </div>
                     ))}
-                    {providerTest.balance && (
-                      <div className="balance-card" style={{ marginTop: 10 }}>
-                        <div className="balance-card-header">
-                          <span>💰 账户余额</span>
-                        </div>
-                        <div className="balance-info">
-                          <div className="balance-row">
-                            <span>总余额</span>
-                            <strong>{providerTest.balance.total} {providerTest.balance.currency}</strong>
-                          </div>
-                          {providerTest.balance.toppedUp && (
-                            <div className="balance-row">
-                              <span>充值余额</span>
-                              <span>{providerTest.balance.toppedUp}</span>
-                            </div>
-                          )}
-                          {providerTest.balance.granted && (
-                            <div className="balance-row">
-                              <span>赠送余额</span>
-                              <span>{providerTest.balance.granted}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
                     {providerTest.suggestion && <div className="provider-test-suggestion">{providerTest.suggestion}</div>}
                   </div>
                 )}

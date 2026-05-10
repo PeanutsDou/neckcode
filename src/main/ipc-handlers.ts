@@ -621,51 +621,50 @@ export function setupIpcHandlers(
     }
     const result = await testOpenAICompatibleProvider(input);
 
-    // Try balance probe
+    // ── Try balance probe ──
     if (input.apiKey?.trim()) {
       const apiKey = input.apiKey.trim();
-      const baseUrl = normalizeOpenAIBaseUrl(input.baseUrl || '');
-      const balanceEndpoints = [
-        `${baseUrl}/user/info`,
-        `${baseUrl}/user/balance`,
-      ];
-      // Also try known provider-specific endpoints
-      if (!baseUrl.includes('deepseek.com')) balanceEndpoints.push('https://api.deepseek.com/user/balance');
+      const rawBase = (input.baseUrl || '').trim();
+      const normalized = normalizeOpenAIBaseUrl(rawBase);
+      const hostOnly = normalized.replace(/\/v\d+$/, '');
+      const bases = [...new Set([rawBase, normalized, hostOnly].filter(Boolean))];
+      const paths = ['/user/info', '/user/balance', '/v1/user/info'];
 
-      for (const url of balanceEndpoints) {
-        try {
-          const resp = await fetch(url, {
-            headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}` },
-          });
-          if (!resp.ok) continue;
-          const data = await resp.json() as Record<string, any>;
-          // DeepSeek format
-          if (data?.balance_infos?.[0]) {
-            const b = data.balance_infos[0];
-            result.balance = {
-              total: b.total_balance || '0',
-              toppedUp: b.topped_up_balance,
-              granted: b.granted_balance,
-              currency: b.currency || 'CNY',
-            };
-            break;
-          }
-          // SiliconFlow / generic format
-          if (data?.data?.totalBalance) {
-            result.balance = {
-              total: data.data.totalBalance,
-              toppedUp: data.data.chargeBalance,
-              granted: data.data.balance,
-              currency: 'CNY',
-            };
-            break;
-          }
-          // Unknown but has total_balance
-          if (data?.total_balance) {
-            result.balance = { total: data.total_balance, currency: 'CNY' };
-            break;
-          }
-        } catch { /* skip */ }
+      for (const base of bases) {
+        for (const path of paths) {
+          const url = `${base}${path}`;
+          if (url.includes('//user')) continue;
+          try {
+            const resp = await fetch(url, {
+              headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}` },
+            });
+            if (!resp.ok) continue;
+            const data = await resp.json() as Record<string, any>;
+            // DeepSeek format
+            if (data?.balance_infos?.[0]) {
+              const b = data.balance_infos[0];
+              result.balance = {
+                total: b.total_balance || '0',
+                toppedUp: b.topped_up_balance,
+                granted: b.granted_balance,
+                currency: b.currency || 'CNY',
+              };
+              result.checks.push({ id: 'balance', label: '余额', status: 'pass', message: `总余额 ${b.total_balance} ${b.currency}` });
+              return result;
+            }
+            // SiliconFlow / generic format
+            if (data?.data?.totalBalance) {
+              result.balance = {
+                total: data.data.totalBalance,
+                toppedUp: data.data.chargeBalance,
+                granted: data.data.balance,
+                currency: 'CNY',
+              };
+              result.checks.push({ id: 'balance', label: '余额', status: 'pass', message: `总余额 ${data.data.totalBalance} CNY` });
+              return result;
+            }
+          } catch { /* skip */ }
+        }
       }
     }
 
