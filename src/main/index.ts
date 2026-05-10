@@ -29,6 +29,10 @@ function setupAutoUpdater(): void {
     mainWindow?.webContents.send('update:available', info.version);
   });
 
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update:progress', progress.percent);
+  });
+
   autoUpdater.on('update-downloaded', () => {
     mainWindow?.webContents.send('update:downloaded');
   });

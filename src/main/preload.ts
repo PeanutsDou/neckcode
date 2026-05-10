@@ -139,6 +139,11 @@ const api = {
     ipcRenderer.on('update:available', listener);
     return () => ipcRenderer.removeListener('update:available', listener);
   },
+  onUpdateProgress: (cb: (pct: number) => void) => {
+    const listener = (_: unknown, pct: number) => cb(pct);
+    ipcRenderer.on('update:progress', listener);
+    return () => ipcRenderer.removeListener('update:progress', listener);
+  },
   onUpdateDownloaded: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on('update:downloaded', listener);
