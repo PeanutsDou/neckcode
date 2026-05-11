@@ -1,6 +1,6 @@
 {
   "name": "deepseekcode",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Desktop GUI coding assistant with multi-model support",
   "private": true,
   "main": "dist/main/index.js",
@@ -45,9 +45,8 @@
       ]
     },
     "publish": {
-      "provider": "github",
-      "owner": "PeanutsDou",
-      "repo": "deepseekcode"
+      "provider": "generic",
+      "url": "http://111.229.84.47/deepseekcode/"
     },
     "asarUnpack": [
       "node_modules/better-sqlite3/**",
