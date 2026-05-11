@@ -34,6 +34,7 @@
       }
     ],
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -41,15 +42,7 @@
             "x64"
           ]
         }
-      ],
-      "icon": "resources/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "runAfterFinish": false,
-      "installerIcon": "resources/icon.ico",
-      "uninstallerIcon": "resources/icon.ico"
+      ]
     },
     "publish": {
       "provider": "github",
@@ -59,7 +52,11 @@
     "asarUnpack": [
       "node_modules/better-sqlite3/**",
       "node_modules/mermaid/**"
-    ]
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
