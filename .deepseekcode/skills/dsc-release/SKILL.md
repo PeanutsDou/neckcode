@@ -1,4 +1,4 @@
----
+﻿---
 name: dsc-release
 description: DeepSeek Code 版本构建与发布流程。TRIGGER when: 用户要求发布新版本、构建安装包、创建 Release、或提到 electron-builder 打包。
 ---
@@ -151,6 +151,25 @@ gh release create v$ver -R PeanutsDou/deepseekcode \
 | 带宽 | ~3Mbps 出站 |
 | 防火墙 | 端口 80 已开放（备注：dc版本管理） |
 
+
+## 下载页面
+
+公开发布链接（HTTPS，Cloudflare Tunnel，自动 HTTPS）：
+```
+https://keys-mark-backup-hold.trycloudflare.com/deepseekcode/
+```
+
+直连链接（HTTP，服务器 IP）：
+```
+http://111.229.84.47/deepseekcode/
+```
+
+页面动态读取 `latest.yml`，版本号、下载链接、文件大小均为自动展示，**发布新版本后无需手动更新页面**。
+
+如需更换 Tunnel URL（服务器重启后可能变化），SSH 到服务器查看：
+```bash
+ssh -i ~/.ssh/peanutsDouAI.pem ubuntu@111.229.84.47 "grep -o 'https://[^ ]*\.trycloudflare\.com' /tmp/cf.log | tail -1"
+```
 ## 差异更新
 
 - 首次从手动安装迁移到自动更新 → 全量下载
