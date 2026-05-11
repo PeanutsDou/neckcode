@@ -58,6 +58,7 @@ export default function App() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+  const [version, setVersion] = useState('');
   const [codeLeftWidth, setCodeLeftWidth] = useState(() => 280);
   const handleCodeResize = (delta: number) => {
     setCodeLeftWidth(prev => {

@@ -178,6 +178,19 @@ function scheduleSaveWindowBounds(): void {
   }, 300);
 }
 
+async function loadRenderer(win: BrowserWindow): Promise<void> {
+  const devUrl = 'http://localhost:5175';
+  const rendererIndex = path.join(__dirname, '../renderer/index.html');
+
+  const launchedForDevServer = process.env.npm_lifecycle_event === 'dev:main';
+  if (!app.isPackaged && launchedForDevServer) {
+    await win.loadURL(devUrl);
+    return;
+  }
+
+  await win.loadFile(rendererIndex);
+}
+
 function createWindow(): void {
   const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
   const saved = getConfig().window;
@@ -208,12 +221,9 @@ function createWindow(): void {
     },
   });
 
-  const isDev = !app.isPackaged;
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5175');
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-  }
+  void loadRenderer(mainWindow).catch(err => {
+    console.error('Failed to load renderer:', err);
+  });
 
   mainWindow.on('resize', scheduleSaveWindowBounds);
   mainWindow.on('move', scheduleSaveWindowBounds);
