@@ -1,8 +1,10 @@
-import React, { useEffect } from 'react';
+﻿import React, { useEffect } from 'react';
 import { useAppStore } from '../stores/app-store';
+import { useChatStore } from '../stores/chat-store';
 
 export function ModelSwitcher() {
   const { currentModel, availableModels, setModel, setAvailableModels } = useAppStore();
+  const activeId = useChatStore(s => s.activeId);
 
   useEffect(() => {
     const load = () => {
@@ -21,6 +23,7 @@ export function ModelSwitcher() {
     const newModel = e.target.value;
     setModel(newModel);
     window.electronAPI.setConfig('model', newModel).catch(console.error);
+    if (activeId) window.electronAPI.setSessionModel?.(activeId, newModel);
   };
 
   return (

@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+﻿import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { getSessionStatus, setSessionId, useChatStore, type ChatEntry, type SessionStatus } from '../stores/chat-store';
+import { useAppStore } from '../stores/app-store';
 
 interface SessionItem {
   id: string;
@@ -64,6 +65,12 @@ export function SessionList() {
     if (localSessions[id]) {
       setSessionId(id);
       switchTo(id);
+      // 恢复此 session 的模型
+      const savedModel = sessions.find(x => x.id === id)?.modelId;
+      if (savedModel) {
+        useAppStore.getState().setModel(savedModel);
+        window.electronAPI?.setSessionModel?.(id, savedModel);
+      }
       return;
     }
 
@@ -71,7 +78,7 @@ export function SessionList() {
       const session = await window.electronAPI.loadSession(id);
       if (!session) return;
 
-      const s = session as { id: string; messages?: Array<ChatEntry>; agentMessages?: unknown[] };
+      const s = session as { id: string; modelId?: string; messages?: Array<ChatEntry>; agentMessages?: unknown[] };
       setSessionId(s.id);
       const chatEntries = (s.messages || []).map((msg: ChatEntry) => ({
         id: Date.now().toString() + Math.random(),
@@ -90,7 +97,7 @@ export function SessionList() {
         : (s.messages || [])
           .filter(msg => msg.role === 'user' || msg.role === 'assistant')
           .map(msg => ({ role: msg.role, content: msg.content, attachments: msg.attachments }));
-      window.electronAPI?.setAgentContext?.(s.id, agentMessages);
+      window.electronAPI?.setAgentContext?.(s.id, agentMessages, s.modelId || '');
     } catch (err) {
       console.error('Failed to load session:', err);
     }

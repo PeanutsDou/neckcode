@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron';
+﻿import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { promises as fs } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { homedir } from 'os';
@@ -31,6 +31,7 @@ export const pendingConfirms = new Map<string, { sessionId: string; resolve: (ap
 const sessionAgents = new Map<string, AgentRuntime>();
 const sessionAbortControllers = new Map<string, AbortController>();
 const sessionRunningTurns = new Map<string, Promise<unknown>>();
+const sessionModels = new Map<string, string>();
 
 let currentPermissionMode: PermissionMode = getConfig().permissionMode || 'default';
 
@@ -254,15 +255,16 @@ export function setupIpcHandlers(
   getProvider: () => Provider,
   getTools: (sessionId?: string) => ToolRegistry,
 ) {
-  function getActiveContextLimit(): number {
+  function getActiveContextLimit(sessionId?: string): number {
     const cfg = getConfig();
-    const mc = getModelConfig(cfg.activeModel);
+    const modelId = sessionId ? sessionModels.get(sessionId) || cfg.activeModel : cfg.activeModel;
+    const mc = getModelConfig(modelId);
     return mc?.contextLimit || cfg.agent.contextLimit || 128_000;
   }
 
   function createSessionAgent(sessionId: string, messages?: Message[]): AgentRuntime {
     const cfg = getConfig();
-    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
+    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit(sessionId));
     if (messages?.length) agent.loadMessages(messages);
     return agent;
   }
@@ -317,6 +319,14 @@ export function setupIpcHandlers(
         {
           onModelRequest() {
             emitRunStatus(sessionId, { phase: 'requesting_model', currentTool: null });
+          },
+          onContextUpdate(status) {
+            emitRunStatus(sessionId, {
+              phase: 'requesting_model',
+              estimatedTokens: status.estimatedTokens,
+              contextLimit: status.contextLimit,
+              compacted: status.compacted,
+            });
           },
           onDelta(text) {
             if (!flushTimer) flushTimer = setInterval(flushDelta, 50);
@@ -380,12 +390,12 @@ export function setupIpcHandlers(
     const existing = sessionAgents.get(sessionId);
     if (existing) {
       const messages = existing.getMessages();
-      const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
+      const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit(sessionId));
       agent.loadMessages(messages);
       sessionAgents.set(sessionId, agent);
       return agent;
     }
-    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
+    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit(sessionId));
     sessionAgents.set(sessionId, agent);
     return agent;
   }
@@ -450,9 +460,14 @@ export function setupIpcHandlers(
     emitRunStatus(sessionId, { phase: 'aborted', currentTool: null, errorCode: 'aborted' });
   });
 
+  ipcMain.handle('session:set-model', (_event, sessionId: string, modelId: string) => {
+    sessionModels.set(sessionId, modelId);
+  });
+
   ipcMain.handle('agent:reset', (_event, sessionId: string) => {
     sessionAgents.delete(sessionId);
     sessionAbortControllers.delete(sessionId);
+    sessionModels.delete(sessionId);
     cancelPendingInteractionsForSession(sessionId, 'Session reset');
   });
 
@@ -463,6 +478,20 @@ export function setupIpcHandlers(
     const agent = new AgentRuntime(p, getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
     agent.loadMessages(messages as any);
     sessionAgents.set(sessionId, agent);
+    const context = agent.getContextStatus();
+    emitRunStatus(sessionId, { phase: 'idle', ...context, compacted: false });
+    return context;
+  });
+
+  ipcMain.handle('agent:context-status', (_event, sessionId: string) => {
+    try {
+      return getOrCreateSessionAgent(sessionId).getContextStatus();
+    } catch {
+      return {
+        estimatedTokens: 0,
+        contextLimit: getActiveContextLimit(),
+      };
+    }
   });
 
   // Ask-user-question round-trip
@@ -753,6 +782,7 @@ export function setupIpcHandlers(
     sessionAbortControllers.get(id)?.abort();
     sessionAbortControllers.delete(id);
     sessionAgents.delete(id);
+    sessionModels.delete(id);
     cancelPendingInteractionsForSession(id, 'Session deleted');
     deleteSession(id);
   });
@@ -839,6 +869,21 @@ export function setupIpcHandlers(
   });
 
   // ---- Skills ----
+  ipcMain.handle('skills:reload', async () => {
+    const root = getConfig().agent.workspaceRoot;
+    await Promise.all([
+      loadSkills(root),
+      discoverAgentMd(root).then(r => { agentMdContent = r.content; agentMdFiles = r.files; }),
+    ]);
+    return getLoadedSkills().map(s => ({
+      name: s.name,
+      description: s.description,
+      whenToUse: s.whenToUse,
+      argumentHint: s.argumentHint,
+      userInvocable: s.userInvocable,
+    }));
+  });
+
   ipcMain.handle('skills:list', () => {
     return getLoadedSkills().map(s => ({
       name: s.name,

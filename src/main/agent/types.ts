@@ -35,8 +35,14 @@ export interface RunStepResult {
   toolCalls: ToolCall[];
 }
 
+export interface ContextStatus {
+  estimatedTokens: number;
+  contextLimit: number;
+}
+
 export interface AgentCallbacks {
   onModelRequest?: () => void;
+  onContextUpdate?: (status: ContextStatus & { compacted: boolean }) => void;
   onDelta?: (text: string) => void;
   onReasoning?: (text: string) => void;
   onToolStart?: (toolCall: ToolCall) => void;

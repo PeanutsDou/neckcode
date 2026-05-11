@@ -18,6 +18,7 @@ export function MemoryDialog({ open, onClose }: Props) {
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [size, setSize] = useState({ w: 700, h: 520 });
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const dragging = useRef(false);
@@ -125,6 +126,7 @@ export function MemoryDialog({ open, onClose }: Props) {
       <div className="md-dialog" onClick={e => e.stopPropagation()} style={{ left: pos.x, top: pos.y, width: size.w, height: size.h }}>
         <div className="md-header" onMouseDown={onDragStart}>
           <h2>记忆管理</h2>
+          <button className="settings-btn-sm" onClick={async () => { setRefreshing(true); try { await window.electronAPI?.reloadSkills?.(); loadFiles(); } catch {} finally { setRefreshing(false); } }} style={{ marginRight: 8, fontSize: 11 }} disabled={refreshing}>{refreshing ? <span className="spinning" style={{display: "inline-block"}}>&#x27F3;</span> : "⟳"} {refreshing ? "刷新中..." : "刷新"}</button>
           <button className="settings-close" onClick={onClose}>&times;</button>
         </div>
 

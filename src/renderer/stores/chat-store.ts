@@ -1,5 +1,6 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import type { AgentError, AgentErrorCode, RunState, RunStatusEvent } from '../../shared/types';
+import { useAppStore } from './app-store';
 
 export interface ChatEntry {
   id: string;
@@ -66,6 +67,9 @@ function emptyRunState(): RunState {
     lastTool: null,
     inputTokens: 0,
     outputTokens: 0,
+    estimatedTokens: 0,
+    contextLimit: 0,
+    compacted: false,
     errorCode: null,
   };
 }
@@ -114,7 +118,7 @@ async function autoSave(sessionId: string, entries: ChatEntry[]) {
   const sessionData: Record<string, unknown> = {
     id: sessionId,
     projectPath: '',
-    modelId: '',
+    modelId: useAppStore.getState().currentModel,
     messages: entries,
     updatedAt: Date.now(),
   };
@@ -208,7 +212,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set(state => {
       const ses = state.sessions[sid] || emptySession();
       const entries = [...ses.entries, entry];
-      if (entry.role === 'user') autoSave(sid, entries);
+      if (entry.role === 'user' || entry.role === 'tool') autoSave(sid, entries);
       return updateSession(state, sid, s => ({ ...s, entries, error: null }));
     });
   },

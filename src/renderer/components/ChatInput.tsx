@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+﻿import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useChatStore, getSessionId, useActiveIsStreaming, useActivePendingContext } from '../stores/chat-store';
 import { useAppStore } from '../stores/app-store';
 import { CustomSelect } from './CustomSelect';
@@ -240,7 +240,7 @@ export function ChatInput() {
             value={currentModel}
             options={availableModels}
             onOpen={refreshModels}
-            onChange={(m) => { setModel(m); window.electronAPI?.setConfig('model', m); }}
+            onChange={(m) => { setModel(m); window.electronAPI?.setConfig('model', m); const sid = getSessionId(); if (sid) window.electronAPI?.setSessionModel?.(sid, m); }}
           />
 
           {isStreaming && (

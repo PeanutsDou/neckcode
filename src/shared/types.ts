@@ -85,6 +85,9 @@ export interface RunState {
   lastTool?: string | null;
   inputTokens: number;
   outputTokens: number;
+  estimatedTokens: number;
+  contextLimit: number;
+  compacted?: boolean;
   errorCode?: AgentErrorCode | null;
 }
 

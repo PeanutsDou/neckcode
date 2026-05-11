@@ -1,5 +1,5 @@
 import { ChatSession } from './session';
-import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message, Attachment } from './types';
+import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message, Attachment, ContextStatus } from './types';
 
 function partitionToolCalls(toolCalls: ToolCall[], toolDefs: ToolDefinition[]): { concurrent: boolean; calls: ToolCall[] }[] {
   const batches: { concurrent: boolean; calls: ToolCall[] }[] = [];
@@ -53,6 +53,30 @@ export class AgentRuntime {
     return this.session.getMessages();
   }
 
+  getContextStatus(): ContextStatus {
+    return {
+      estimatedTokens: this.session.estimateTokens(),
+      contextLimit: this.contextLimit,
+    };
+  }
+
+  private compactIfNeeded(callbacks?: AgentCallbacks): ContextStatus & { compacted: boolean } {
+    let estimatedTokens = this.session.estimateTokens();
+    let compacted = false;
+    if (estimatedTokens > this.contextLimit * 0.8) {
+      compacted = this.session.compact(5);
+      estimatedTokens = this.session.estimateTokens();
+    }
+
+    const status = {
+      estimatedTokens,
+      contextLimit: this.contextLimit,
+      compacted,
+    };
+    callbacks?.onContextUpdate?.(status);
+    return status;
+  }
+
   clear(): void {
     this.session.clear();
   }
@@ -65,18 +89,13 @@ export class AgentRuntime {
     const checkpoint = this.session.createCheckpoint();
     this.session.addUserMessage(userMessage, attachments);
 
-    // Auto-compact if exceeding 80% of context limit
-    const estimatedTokens = this.session.estimateTokens();
-    if (estimatedTokens > this.contextLimit * 0.8) {
-      this.session.compact(5); // Keep last 5 turns
-    }
-
     try {
       for (let turn = 0; turn < this.maxTurns; turn++) {
         if (signal?.aborted) {
           throw new Error('Aborted');
         }
 
+        this.compactIfNeeded(callbacks);
         callbacks.onModelRequest?.();
         const step = await this.provider.runStep({
           messages: this.session.toMessages(),

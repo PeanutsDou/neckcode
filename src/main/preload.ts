@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+﻿import { contextBridge, ipcRenderer } from 'electron';
 
 console.log('[preload] loading...');
 
@@ -12,7 +12,9 @@ const api = {
   },
   abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
   resetAgent: (sessionId: string) => ipcRenderer.invoke('agent:reset', sessionId),
-  setAgentContext: (sessionId: string, messages: unknown[]) => ipcRenderer.invoke('agent:set-context', sessionId, messages),
+  setAgentContext: (sessionId: string, messages: unknown[], modelId?: string) => ipcRenderer.invoke('agent:set-context', sessionId, messages, modelId),
+  getAgentContextStatus: (sessionId: string) => ipcRenderer.invoke('agent:context-status', sessionId),
+  setSessionModel: (sessionId: string, modelId: string) => ipcRenderer.invoke('session:set-model', sessionId, modelId),
 
   // Agent events
   onDelta: (cb: (sid: string, text: string) => void) => {
@@ -91,6 +93,7 @@ const api = {
 
   // Skills
   listSkills: () => ipcRenderer.invoke('skills:list'),
+  reloadSkills: () => ipcRenderer.invoke('skills:reload'),
   invokeSkill: (name: string) => ipcRenderer.invoke('skills:invoke', name),
   writeSkillContent: (name: string, content: string) => ipcRenderer.invoke('skills:write-content', name, content),
   deleteSkill: (name: string) => ipcRenderer.invoke('skills:delete', name),

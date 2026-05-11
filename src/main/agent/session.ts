@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { Message, ToolCall, Attachment } from './types';
+import { estimateMessageTokens } from './token-counter';
 
 export class ChatSession {
   private messages: Message[] = [];
@@ -86,46 +87,13 @@ export class ChatSession {
     this.checkpoints = [];
   }
 
-  /** Estimate total tokens with CJK-aware weighting */
+  /** Estimate the token footprint of the complete provider message list. */
   estimateTokens(): number {
-    let total = this.systemPrompt ? this._tokenEstimate(this.systemPrompt) : 0;
-    for (const m of this.messages) {
-      total += this._tokenEstimate(m.content);
-      if (m.attachments) {
-        // Image token usage is provider-specific; reserve a conservative budget
-        // so image-heavy turns can still trigger compaction before API failure.
-        total += m.attachments.length * 1024;
-      }
-      if (m.toolCalls) {
-        for (const tc of m.toolCalls) total += this._tokenEstimate(tc.argumentsText);
-      }
-    }
-    return total;
-  }
-
-  private _tokenEstimate(text: string): number {
-    let cjk = 0;
-    let ascii = 0;
-    for (const ch of text) {
-      const code = ch.charCodeAt(0);
-      if (
-        (code >= 0x4E00 && code <= 0x9FFF) ||
-        (code >= 0x3400 && code <= 0x4DBF) ||
-        (code >= 0x3000 && code <= 0x303F) ||
-        (code >= 0xFF00 && code <= 0xFFEF) ||
-        (code >= 0xAC00 && code <= 0xD7AF) ||
-        code > 127
-      ) {
-        cjk++;
-      } else {
-        ascii++;
-      }
-    }
-    return Math.round(cjk * 0.7 + ascii * 0.25);
+    return estimateMessageTokens(this.toMessages());
   }
 
   /** Compact: replace early messages with a system summary, keeping recent turn groups intact */
-  compact(keepRecentTurns: number, maxSummaryChars: number = 12000): void {
+  compact(keepRecentTurns: number, maxSummaryChars: number = 12000): boolean {
     // Count turns from the end: a turn = user + assistant + any following tool messages
     let turnCount = 0;
     let cutoff = -1;
@@ -140,7 +108,7 @@ export class ChatSession {
       }
     }
 
-    if (cutoff <= 0) return;
+    if (cutoff <= 0) return false;
 
     const earlyMessages = this.messages.slice(0, cutoff);
     const recentMessages = this.messages.slice(cutoff);
@@ -176,5 +144,6 @@ export class ChatSession {
       { role: 'system', content: summary },
       ...recentMessages,
     ];
+    return true;
   }
 }
