@@ -7,7 +7,8 @@ import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import type { ContextStatus, Message } from './agent/types';
 import { AUTO_COMPACT_BUFFER_TOKENS, BLOCKING_BUFFER_TOKENS, MAX_RESERVED_OUTPUT_TOKENS } from './agent/context-manager';
-import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig } from './config';
+import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig, inferModelMode } from './config';
+import { VisionInterpreter } from './agent/vision-interpreter';
 import type { AppConfigData, ProviderConfig } from './config';
 import type { PermissionMode } from '../shared/permissions';
 import type { AgentError, AgentErrorCode, ProviderTestCheck, ProviderTestConfig, ProviderTestResult, RunStatusEvent } from '../shared/types';
@@ -109,6 +110,9 @@ function classifyAgentError(error: unknown): AgentError {
   } else if (lower.includes('context') || lower.includes('maximum context') || lower.includes('token limit')) {
     code = 'context_limit';
     suggestion = '上下文过长。可以新建会话、减少输入内容，或等待上下文压缩后重试。';
+  } else if (lower.includes('image parser model') || lower.includes('supports vision') || lower.includes('image input')) {
+    code = 'model_not_found';
+    suggestion = '图片解析模型不可用或不支持图片输入。请在设置里选择真实支持视觉输入的多模态模型。';
   } else if (lower.includes('permission') || lower.includes('operation cancelled')) {
     code = 'permission_denied';
     suggestion = '操作被取消或权限不足。确认权限模式和工具确认弹窗。';
@@ -253,7 +257,7 @@ function ensurePath(workspaceRoot: string, inputPath: string): string {
 }
 
 export function setupIpcHandlers(
-  getProvider: (modelId?: string) => Provider,
+  getProvider: (modelId?: string, options?: { stream?: boolean; maxTokens?: number }) => Provider,
   getTools: (sessionId?: string) => ToolRegistry,
 ) {
   function getSessionModelId(sessionId?: string): string {
@@ -274,7 +278,20 @@ export function setupIpcHandlers(
   function createSessionAgent(sessionId: string, messages?: Message[]): AgentRuntime {
     const cfg = getConfig();
     const modelId = getSessionModelId(sessionId);
-    const agent = new AgentRuntime(getProvider(modelId), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getContextConfig(sessionId));
+    const modelMode = getModelConfig(modelId)?.mode || inferModelMode(modelId);
+    const parserModel = cfg.vision?.parserModel || '';
+    const parserConfig = parserModel ? getModelConfig(parserModel) : undefined;
+    const interpreter = modelMode === 'text' && parserModel && (parserConfig?.mode || inferModelMode(parserModel)) === 'multimodal'
+      ? new VisionInterpreter(getProvider(parserModel, { stream: false, maxTokens: Math.min(parserConfig?.maxTokens || 4096, 4096) }), parserModel)
+      : undefined;
+    const agent = new AgentRuntime(
+      getProvider(modelId),
+      getTools(sessionId),
+      cfg.agent.maxTurns,
+      buildFullPrompt(),
+      getContextConfig(sessionId),
+      { currentModelMode: modelMode, interpreter },
+    );
     if (messages?.length) agent.loadMessages(messages);
     return agent;
   }
@@ -380,6 +397,14 @@ export function setupIpcHandlers(
         {
           onModelRequest() {
             emitRunStatus(sessionId, { phase: 'requesting_model', currentTool: null });
+          },
+          onVisionStart() {
+            emitRunStatus(sessionId, { phase: 'analyzing_image', currentTool: null });
+          },
+          onVisionResult(document) {
+            getWindow()?.webContents.send('agent:vision-result', sessionId, {
+              content: `<details>\n<summary>图片解析结果</summary>\n\n${document}\n\n</details>`,
+            });
           },
           onContextUpdate(status) {
             emitRunStatus(sessionId, {
@@ -626,6 +651,7 @@ export function setupIpcHandlers(
       models: getAllModelNames(),
       modelContexts,
       providers: cfg.providers.map(p => ({ id: p.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, models: p.models })),
+      vision: cfg.vision || {},
       activeProvider: cfg.activeProvider,
       workspaceRoot: cfg.agent.workspaceRoot,
       maxTurns: cfg.agent.maxTurns,
@@ -658,6 +684,9 @@ export function setupIpcHandlers(
     else if (key === 'maxTurns') cfg.agent.maxTurns = value as number;
     else if (key === 'maxTokens') cfg.agent.maxTokens = value as number;
     else if (key === 'contextLimit') cfg.agent.contextLimit = value as number;
+    else if (key === 'visionParserModel') {
+      cfg.vision = { ...(cfg.vision || {}), parserModel: value as string, visibility: 'collapsed', pipeline: 'adaptive' };
+    }
     else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
     else if (key === 'workspaceRoot') { cfg.agent.workspaceRoot = value as string; await saveConfig(); return; }
     else if (key === 'theme') { cfg.theme = value as 'light' | 'dark'; await saveConfig(); return; }

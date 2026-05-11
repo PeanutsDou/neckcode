@@ -4,10 +4,13 @@ import { homedir } from 'os';
 import { encrypt, decrypt } from './config/secrets';
 import type { PermissionMode } from '../shared/permissions';
 
+export type ModelMode = 'text' | 'multimodal';
+
 export interface ModelConfig {
   name: string;
   contextLimit?: number;
   maxTokens?: number;
+  mode?: ModelMode;
 }
 
 export interface ProviderConfig {
@@ -22,6 +25,11 @@ export interface AppConfigData {
   providers: ProviderConfig[];
   activeProvider: string;
   activeModel: string;
+  vision?: {
+    parserModel?: string;
+    visibility?: 'collapsed';
+    pipeline?: 'adaptive';
+  };
   agent: {
     maxTurns: number;
     maxTokens: number;       // fallback max output tokens
@@ -53,8 +61,8 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
     baseUrl: 'https://api.deepseek.com/v1',
     apiKey: '',
     models: [
-      { name: 'deepseek-v4-pro', contextLimit: 1000000, maxTokens: 32768 },
-      { name: 'deepseek-v4-flash', contextLimit: 1000000, maxTokens: 16384 },
+      { name: 'deepseek-v4-pro', contextLimit: 1000000, maxTokens: 32768, mode: 'text' },
+      { name: 'deepseek-v4-flash', contextLimit: 1000000, maxTokens: 16384, mode: 'text' },
     ],
   },
   {
@@ -63,8 +71,8 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
     baseUrl: 'https://api.anthropic.com/v1',
     apiKey: '',
     models: [
-      { name: 'claude-sonnet-4-6', contextLimit: 200000, maxTokens: 32768 },
-      { name: 'claude-haiku-4-5', contextLimit: 200000, maxTokens: 16384 },
+      { name: 'claude-sonnet-4-6', contextLimit: 200000, maxTokens: 32768, mode: 'multimodal' },
+      { name: 'claude-haiku-4-5', contextLimit: 200000, maxTokens: 16384, mode: 'multimodal' },
     ],
   },
 ];
@@ -73,6 +81,11 @@ const defaultConfig: AppConfigData = {
   providers: DEFAULT_PROVIDERS,
   activeProvider: 'deepseek',
   activeModel: 'deepseek-v4-pro',
+  vision: {
+    parserModel: '',
+    visibility: 'collapsed',
+    pipeline: 'adaptive',
+  },
   agent: {
     maxTurns: 100,
     maxTokens: 32768,
@@ -91,17 +104,43 @@ function normalizePermissionMode(value: unknown): PermissionMode {
   return value === 'fullAccess' ? 'fullAccess' : 'default';
 }
 
+export function inferModelMode(modelName: string): ModelMode {
+  const name = modelName.toLowerCase();
+  const multimodalPatterns = [
+    'vision',
+    'multimodal',
+    'omni',
+    'gpt-4o',
+    'gpt-4.1',
+    'gpt-5',
+    'gemini',
+    'qwen-vl',
+    'qwen2-vl',
+    'qwen2.5-vl',
+    'qwen-omni',
+    'vl',
+    'claude-3',
+    'claude-sonnet-4',
+    'claude-haiku-4',
+    'claude-opus-4',
+  ];
+  return multimodalPatterns.some(pattern => name.includes(pattern)) ? 'multimodal' : 'text';
+}
+
 function normalizeModels(raw: unknown): ModelConfig[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((m: unknown) => {
-      if (typeof m === 'string') return { name: m };
+    .map((m: unknown): ModelConfig | null => {
+      if (typeof m === 'string') return { name: m, mode: inferModelMode(m) };
       if (typeof m === 'object' && m !== null && typeof (m as Record<string, unknown>).name === 'string') {
         const o = m as Record<string, unknown>;
+        const name = o.name as string;
+        const rawMode = o.mode;
         return {
-          name: o.name as string,
+          name,
           contextLimit: typeof o.contextLimit === 'number' ? o.contextLimit : undefined,
           maxTokens: typeof o.maxTokens === 'number' ? o.maxTokens : undefined,
+          mode: rawMode === 'text' || rawMode === 'multimodal' ? rawMode : inferModelMode(name),
         };
       }
       return null;

@@ -1,6 +1,7 @@
 import { ChatSession } from './session';
 import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message, Attachment, ContextStatus } from './types';
 import { ContextManager, type ContextManagerConfig } from './context-manager';
+import type { VisionInterpreter } from './vision-interpreter';
 
 function partitionToolCalls(toolCalls: ToolCall[], toolDefs: ToolDefinition[]): { concurrent: boolean; calls: ToolCall[] }[] {
   const batches: { concurrent: boolean; calls: ToolCall[] }[] = [];
@@ -43,6 +44,7 @@ export class AgentRuntime {
     private maxTurns: number,
     systemPrompt?: string,
     contextConfig: ContextManagerConfig | number = 1_000_000,
+    private vision?: { currentModelMode: 'text' | 'multimodal'; interpreter?: VisionInterpreter },
   ) {
     this.session = new ChatSession(systemPrompt);
     this.contextManager = new ContextManager(typeof contextConfig === 'number'
@@ -71,10 +73,26 @@ export class AgentRuntime {
   }
 
   async runUserTurn(userMessage: string, attachments: Attachment[], callbacks: AgentCallbacks, signal?: AbortSignal): Promise<RunStepResult> {
-    const checkpoint = this.session.createCheckpoint();
-    this.session.addUserMessage(userMessage, attachments);
+    let checkpoint = -1;
 
     try {
+      let effectiveMessage = userMessage;
+      let effectiveAttachments = attachments;
+      const imageAttachments = attachments.filter(att => att.type === 'image');
+      if (imageAttachments.length > 0 && this.vision?.currentModelMode === 'text') {
+        if (!this.vision.interpreter) {
+          throw new Error('Current model is text-only and no multimodal image parser model is configured.');
+        }
+        callbacks.onVisionStart?.();
+        const visualContext = await this.vision.interpreter.interpret(userMessage, imageAttachments, signal);
+        callbacks.onVisionResult?.(visualContext);
+        effectiveMessage = `${userMessage}\n\n${visualContext}`;
+        effectiveAttachments = [];
+      }
+
+      checkpoint = this.session.createCheckpoint();
+      this.session.addUserMessage(effectiveMessage, effectiveAttachments);
+
       for (let turn = 0; turn < this.maxTurns; turn++) {
         if (signal?.aborted) {
           throw new Error('Aborted');
@@ -131,7 +149,7 @@ export class AgentRuntime {
 
       throw new Error(`Agent stopped after ${this.maxTurns} turns`);
     } catch (error) {
-      if (!signal?.aborted) {
+      if (!signal?.aborted && checkpoint >= 0) {
         // Unexpected error: roll back this turn
         this.session.restore(checkpoint);
         callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));

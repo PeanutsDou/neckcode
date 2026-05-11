@@ -7,6 +7,7 @@ const phaseLabels: Record<RunPhase, string> = {
   idle: '',
   starting: '正在启动',
   requesting_model: '正在请求模型',
+  analyzing_image: '正在解析图片',
   thinking: '正在思考',
   streaming: '正在输出',
   tool_running: '正在执行工具',

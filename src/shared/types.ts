@@ -69,6 +69,7 @@ export type RunPhase =
   | 'idle'
   | 'starting'
   | 'requesting_model'
+  | 'analyzing_image'
   | 'thinking'
   | 'streaming'
   | 'tool_running'

@@ -7,9 +7,10 @@ export interface AnthropicConfig {
   apiKey: string;
   model: string;
   maxTokens?: number;
+  supportsVision?: boolean;
 }
 
-function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
+function toAnthropicMessages(messages: Message[], supportsVision: boolean): Anthropic.MessageParam[] {
   const result: Anthropic.MessageParam[] = [];
 
   for (const msg of messages) {
@@ -42,19 +43,29 @@ function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
         const blocks = msg.content
           ? [{ type: 'text', text: msg.content }]
           : [];
-        for (const att of msg.attachments) {
-          if (att.type === 'image') {
+        if (supportsVision) {
+          for (const att of msg.attachments) {
+            if (att.type === 'image') {
             // Extract base64 data and media type from data URI
-            const match = att.data.match(/^data:([^;]+);base64,(.+)$/);
-            const mediaType = match ? match[1] : 'image/png';
-            const base64data = match ? match[2] : att.data;
+              const match = att.data.match(/^data:([^;]+);base64,(.+)$/);
+              const mediaType = match ? match[1] : 'image/png';
+              const base64data = match ? match[2] : att.data;
+              (blocks as Record<string, unknown>[]).push({
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: mediaType,
+                  data: base64data,
+                },
+              });
+            }
+          }
+        } else {
+          const imageCount = msg.attachments.filter(att => att.type === 'image').length;
+          if (imageCount > 0) {
             (blocks as Record<string, unknown>[]).push({
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: mediaType,
-                data: base64data,
-              },
+              type: 'text',
+              text: `[${imageCount} image attachment(s) omitted because this model is configured as text-only.]`,
             });
           }
         }
@@ -100,6 +111,7 @@ function parseUsage(usage: unknown): ProviderUsage | undefined {
 
 export function createAnthropicProvider(config: AnthropicConfig): Provider {
   const client = new Anthropic({ apiKey: config.apiKey });
+  const supportsVision = config.supportsVision === true;
 
   return {
     async runStep({ messages, tools, model, onDelta, onReasoning, signal }) {
@@ -110,7 +122,7 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
       // messages instead of dropping everything after the first one.
       const systemPrompt = buildAnthropicSystemPrompt(messages);
 
-      const apiMessages = toAnthropicMessages(messages);
+      const apiMessages = toAnthropicMessages(messages, supportsVision);
       const apiTools = tools.length > 0 ? toAnthropicTools(tools) : undefined;
 
       const stream = client.messages.stream({

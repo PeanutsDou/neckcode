@@ -38,6 +38,11 @@ const api = {
     ipcRenderer.on('agent:tool-result', listener);
     return () => { ipcRenderer.removeListener('agent:tool-result', listener); };
   },
+  onVisionResult: (cb: (sid: string, data: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
+    ipcRenderer.on('agent:vision-result', listener);
+    return () => { ipcRenderer.removeListener('agent:vision-result', listener); };
+  },
   onTurnDone: (cb: (sid: string, data: unknown) => void) => {
     const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
     ipcRenderer.on('agent:turn-done', listener);

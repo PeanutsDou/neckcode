@@ -5,7 +5,7 @@ import { setupIpcHandlers } from './ipc-handlers';
 import { createOpenAIProvider } from './providers/openai-compatible';
 import { createAnthropicProvider } from './providers/anthropic';
 import { createToolRegistry } from './tools/registry';
-import { loadConfig, saveConfig, getConfig, getActiveProvider, getModelConfig } from './config';
+import { loadConfig, saveConfig, getConfig, getActiveProvider, getModelConfig, inferModelMode } from './config';
 import { loadSkills } from './skills/loader';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
@@ -93,19 +93,21 @@ ipcMain.handle('close:choice', async (_event, action: string, remember: boolean)
   }
 });
 
-function createProvider(modelOverride?: string): Provider {
+function createProvider(modelOverride?: string, options?: { stream?: boolean; maxTokens?: number }): Provider {
   const cfg = getConfig();
   const model = modelOverride || cfg.activeModel;
   const active = cfg.providers.find(p => p.models.some(m => m.name === model)) || getActiveProvider();
 
   const modelCfg = getModelConfig(model);
-  const maxTokens = modelCfg?.maxTokens || cfg.agent.maxTokens;
+  const maxTokens = options?.maxTokens || modelCfg?.maxTokens || cfg.agent.maxTokens;
+  const supportsVision = (modelCfg?.mode || inferModelMode(model)) === 'multimodal';
 
   if (active.id === 'anthropic') {
     return createAnthropicProvider({
       apiKey: active.apiKey || process.env.ANTHROPIC_API_KEY || '',
       model,
       maxTokens,
+      supportsVision,
     });
   }
 
@@ -114,6 +116,8 @@ function createProvider(modelOverride?: string): Provider {
     apiKey: active.apiKey,
     model,
     maxTokens,
+    supportsVision,
+    stream: options?.stream,
   });
 }
 

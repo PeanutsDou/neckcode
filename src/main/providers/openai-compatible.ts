@@ -9,6 +9,7 @@ export interface OpenAIConfig {
   stream?: boolean;
   temperature?: number;
   maxTokens?: number;
+  supportsVision?: boolean;
   // Default max_tokens is 16384 — avoids truncation on long replies
 }
 
@@ -58,9 +59,7 @@ function parseUsage(raw: unknown): ProviderUsage | undefined {
 }
 
 export function createOpenAIProvider(config: OpenAIConfig): Provider {
-  // Detect if current model supports vision
-  const VISION_PATTERNS = ['gpt-4', 'vision', 'vl', 'gemini', 'qwen'];
-  const supportsVision = VISION_PATTERNS.some(k => (config.model || '').toLowerCase().includes(k));
+  const supportsVision = config.supportsVision === true;
 
   // Normalize base URL: strip trailing /chat/completions etc. if user accidentally pasted the full endpoint
   const baseUrl = config.baseUrl.replace(/\/(chat\/completions|completions|v1)\/?$/, '');

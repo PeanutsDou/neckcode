@@ -16,6 +16,7 @@ interface ModelRow {
   name: string;
   contextLimit: number;
   maxTokens: number;
+  mode: 'text' | 'multimodal';
 }
 
 interface BalanceInfo {
@@ -37,12 +38,15 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [newModelName, setNewModelName] = useState('');
   const [newModelCtx, setNewModelCtx] = useState(0);
   const [newModelMax, setNewModelMax] = useState(32768);
+  const [newModelMode, setNewModelMode] = useState<'text' | 'multimodal'>('text');
   const [editingModelIdx, setEditingModelIdx] = useState<number | null>(null);
   const [testingProvider, setTestingProvider] = useState(false);
   const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
   const [balance, setBalance] = useState<BalanceInfo | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [visionParserModel, setVisionParserModel] = useState('');
+  const [multimodalModels, setMultimodalModels] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -54,8 +58,47 @@ export function SettingsDialog({ open, onClose }: Props) {
       const cfg = await window.electronAPI.getConfig() as any;
       const list = cfg.providers || [];
       setProviderList(list.map((p: any) => ({ id: p.id, name: p.name, models: Array.isArray(p.models) ? p.models.map((m: any) => typeof m === 'string' ? m : m.name) : [] })));
+      const multimodal = list.flatMap((p: any) => (p.models || [])
+        .filter((m: any) => typeof m === 'object' && m.mode === 'multimodal')
+        .map((m: any) => m.name));
+      setMultimodalModels(multimodal);
+      setVisionParserModel(cfg.vision?.parserModel || '');
     } catch { /* */ }
   };
+
+  const saveVisionParserModel = async (model: string) => {
+    setVisionParserModel(model);
+    await window.electronAPI.setConfig('visionParserModel', model);
+    window.dispatchEvent(new CustomEvent('providers-changed'));
+  };
+
+  const inferModelMode = (name: string): 'text' | 'multimodal' => {
+    const lower = name.toLowerCase();
+    const multimodalPatterns = [
+      'vision',
+      'multimodal',
+      'omni',
+      'gpt-4o',
+      'gpt-4.1',
+      'gpt-5',
+      'gemini',
+      'qwen-vl',
+      'qwen2-vl',
+      'qwen2.5-vl',
+      'qwen-omni',
+      'vl',
+      'claude-3',
+      'claude-sonnet-4',
+      'claude-haiku-4',
+      'claude-opus-4',
+    ];
+    return multimodalPatterns.some(pattern => lower.includes(pattern)) ? 'multimodal' : 'text';
+  };
+
+  useEffect(() => {
+    if (!addingModel || editingModelIdx !== null) return;
+    setNewModelMode(inferModelMode(newModelName));
+  }, [newModelName, addingModel, editingModelIdx]);
 
   const startEdit = async (id: string) => {
     const cfg = await window.electronAPI.getConfig() as any;
@@ -65,6 +108,7 @@ export function SettingsDialog({ open, onClose }: Props) {
       name: typeof m === 'string' ? m : m.name,
       contextLimit: (typeof m === 'object' ? m.contextLimit : undefined) || 0,
       maxTokens: (typeof m === 'object' ? m.maxTokens : undefined) || 32768,
+      mode: (typeof m === 'object' && (m.mode === 'text' || m.mode === 'multimodal')) ? m.mode : inferModelMode(typeof m === 'string' ? m : m.name),
     }));
     setEditingId(id);
     setEditName(full.name || id);
@@ -103,10 +147,12 @@ export function SettingsDialog({ open, onClose }: Props) {
       name: newModelName.trim(),
       contextLimit: newModelCtx || 0,
       maxTokens: newModelMax || 32768,
+      mode: newModelMode,
     }]);
     setNewModelName('');
     setNewModelCtx(0);
     setNewModelMax(32768);
+    setNewModelMode('text');
     setAddingModel(false);
   };
 
@@ -120,6 +166,7 @@ export function SettingsDialog({ open, onClose }: Props) {
     setNewModelName(m.name);
     setNewModelCtx(m.contextLimit);
     setNewModelMax(m.maxTokens);
+    setNewModelMode(m.mode || inferModelMode(m.name));
     setEditingModelIdx(idx);
     setAddingModel(true);
   };
@@ -131,11 +178,13 @@ export function SettingsDialog({ open, onClose }: Props) {
       name: newModelName.trim(),
       contextLimit: newModelCtx || 0,
       maxTokens: newModelMax || 32768,
+      mode: newModelMode,
     };
     setEditModels(updated);
     setNewModelName('');
     setNewModelCtx(0);
     setNewModelMax(32768);
+    setNewModelMode('text');
     setAddingModel(false);
     setEditingModelIdx(null);
   };
@@ -149,6 +198,7 @@ export function SettingsDialog({ open, onClose }: Props) {
       name: m.name,
       contextLimit: m.contextLimit || undefined,
       maxTokens: m.maxTokens || undefined,
+      mode: m.mode || inferModelMode(m.name),
     }));
     const isNew = editingId === '__new__';
     const apiKeyValue = isNew ? editApiKey.trim() : (editApiKey.trim() || undefined);
@@ -237,6 +287,14 @@ export function SettingsDialog({ open, onClose }: Props) {
           {/* Left: providers list */}
           <div className="settings-left">
             <div className="settings-form">
+              <label className="settings-label">图片解析模型
+                <select className="settings-input" value={visionParserModel} onChange={e => saveVisionParserModel(e.target.value)}>
+                  <option value="">未配置</option>
+                  {multimodalModels.map(model => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              </label>
               <div className="provider-list">
                 {providerList.map(p => (
                   <div key={p.id} className={`provider-item ${editingId === p.id ? 'selected' : ''}`} onClick={() => startEdit(p.id)}>
@@ -315,6 +373,7 @@ export function SettingsDialog({ open, onClose }: Props) {
                   {editModels.map((m, i) => (
                     <div key={m.name + i} className="model-row">
                       <span className="model-name">{m.name}</span>
+                      <span className="model-mode">{m.mode === 'multimodal' ? '多模态' : '纯文本'}</span>
                       <span className="model-meta">
                         ctx: {m.contextLimit > 0 ? `${(m.contextLimit / 1000).toFixed(0)}K` : 'default'} · max: {m.maxTokens > 0 ? `${(m.maxTokens / 1024).toFixed(0)}K` : 'default'}
                       </span>
@@ -335,6 +394,11 @@ export function SettingsDialog({ open, onClose }: Props) {
                       onChange={e => setNewModelCtx(Number(e.target.value))} placeholder="上下文窗口" style={{ flex: 1 }} />
                     <input type="number" className="settings-input" value={newModelMax || ''}
                       onChange={e => setNewModelMax(Number(e.target.value))} placeholder="最大输出" style={{ flex: 1 }} />
+                    <select className="settings-input" value={newModelMode}
+                      onChange={e => setNewModelMode(e.target.value as 'text' | 'multimodal')} style={{ flex: 1 }}>
+                      <option value="text">纯文本</option>
+                      <option value="multimodal">多模态</option>
+                    </select>
                     <button className="btn btn-send" onClick={editingModelIdx !== null ? handleSaveModelEdit : handleAddModel}>
                       {editingModelIdx !== null ? '更新' : '确认'}
                     </button>
