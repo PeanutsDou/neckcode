@@ -5,55 +5,78 @@ description: DeepSeek Code 版本构建与发布流程。TRIGGER when: 用户要
 
 # DeepSeek Code 发布 Skill
 
+## 架构总览
+
+```
+构建（本地） → 上传到自建服务器 → 创建 GitHub Release（仅 changelog）
+                    ↘                          ↙
+          latest.yml 同时上传服务器 + GitHub
+                    ↓
+      用户客户端 → 检测更新 → 从服务器下载安装包
+```
+
+| 组件 | 角色 | URL |
+|------|------|-----|
+| 自建服务器（nginx） | 安装包分发 | http://111.229.84.47/deepseekcode/ |
+| GitHub Release | 版本历史 & changelog | https://github.com/PeanutsDou/deepseekcode/releases |
+
 ## 前置条件
 
-- Windows 环境下需要**管理员权限**运行终端（winCodeSign 解压需要创建符号链接）
-- `gh` CLI 已安装并登录 PeanutsDou
-- 所有构建产物在 `release/` 目录下
+- **管理员权限**终端（winCodeSign 签名需要）
+- `gh` CLI 已登录 PeanutsDou
+- SSH Key `~/.ssh/peanutsDouAI.pem` 可访问服务器（111.229.84.47）
+- 构建产物在 `release/` 目录
 
 ## 发布流程
 
 ### 1. 版本号
 
 ```bash
-# 修改 package.json 中的 version 字段
-node -e "const p=require('./package.json');p.version='0.1.X';require('fs').writeFileSync('./package.json',JSON.stringify(p,null,2)+'\n')"
+npm version minor  # 或 npm version patch，或手动改 package.json
 ```
 
 ### 2. 构建
 
+以**管理员身份**运行终端（右键 → 以管理员身份运行）：
+
 ```bash
-# 以管理员身份运行
+cd D:\douzhongjun\deepseekcode
 npm run dist
 ```
 
-### 3. 文件重命名（关键！）
+### 3. 整理产物
 
-electron-builder 产出的文件名含空格，会导致 GitHub Release 和 latest.yml 文件名不匹配。必须重命名为不含空格的简单名称：
+electron-builder 产出文件名含空格，重命名：
 
 ```bash
-cd release
-# 重命名 exe（去掉空格）
-Move-Item -LiteralPath "DeepSeek Code Setup 0.1.X.exe" -Destination "dsc-setup-0.1.X.exe"
-Move-Item -LiteralPath "DeepSeek Code Setup 0.1.X.exe.blockmap" -Destination "dsc-setup-0.1.X.exe.blockmap"
+cd D:\douzhongjun\deepseekcode
+$ver = "0.1.X"
+$exeFile = "release\DeepSeek Code Setup $ver.exe"
+$blockFile = "release\DeepSeek Code Setup $ver.exe.blockmap"
+Move-Item -LiteralPath $exeFile -Destination "release\dsc-setup-$ver.exe" -Force
+Move-Item -LiteralPath $blockFile -Destination "release\dsc-setup-$ver.exe.blockmap" -Force
 ```
 
 ### 4. 生成 latest.yml
 
-文件名与 Release 上的文件名必须一致：
+必须包含 exe 和 blockmap 两个文件条目（差异更新需要 blockmap）：
 
 ```powershell
 $ver = "0.1.X"
-$exeFile = Get-Item "release\dsc-setup-$ver.exe"
-$exeHash = (Get-FileHash $exeFile.FullName -Algorithm SHA512).Hash.ToLower()
-$exeSize = $exeFile.Length
+$exe = Get-Item "release\dsc-setup-$ver.exe"
+$block = Get-Item "release\dsc-setup-$ver.exe.blockmap"
+$exeHash = (Get-FileHash $exe.FullName -Algorithm SHA512).Hash.ToLower()
+$blockHash = (Get-FileHash $block.FullName -Algorithm SHA512).Hash.ToLower()
 
 $latest = @"
 version: $ver
 files:
   - url: dsc-setup-$ver.exe
     sha512: $exeHash
-    size: $exeSize
+    size: $($exe.Length)
+  - url: dsc-setup-$ver.exe.blockmap
+    sha512: $blockHash
+    size: $($block.Length)
 path: dsc-setup-$ver.exe
 sha512: $exeHash
 releaseDate: '$(Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ")'
@@ -61,75 +84,106 @@ releaseDate: '$(Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ")'
 [System.IO.File]::WriteAllText("release\latest.yml", $latest, [System.Text.Encoding]::UTF8)
 ```
 
-### 5. 提交代码
+### 5. 上传到服务器
+
+```bash
+scp -i ~/.ssh/peanutsDouAI.pem release\dsc-setup-$ver.exe ubuntu@111.229.84.47:/var/www/html/deepseekcode/
+scp -i ~/.ssh/peanutsDouAI.pem release\dsc-setup-$ver.exe.blockmap ubuntu@111.229.84.47:/var/www/html/deepseekcode/
+scp -i ~/.ssh/peanutsDouAI.pem release\latest.yml ubuntu@111.229.84.47:/var/www/html/deepseekcode/
+```
+
+验证：
+```bash
+ssh -i ~/.ssh/peanutsDouAI.pem ubuntu@111.229.84.47 "ls -la /var/www/html/deepseekcode/"
+```
+
+### 6. 提交代码 + Tag
 
 ```bash
 git add .
-git commit -m "v0.1.X: 描述改动"
-git tag v0.1.X
+git commit -m "v$ver: xxx"
+git tag v$ver
 git push origin master --tags
 ```
 
-### 6. 创建 GitHub Release
+### 7. 上传 latest.yml 到 GitHub（关键！）
+
+**这一步不能省。** 已经安装旧版的用户从 GitHub 检测更新，读到 latest.yml 后从服务器下载。
 
 ```bash
-gh release create v0.1.X -R PeanutsDou/deepseekcode \
-  --title "v0.1.X" \
-  --notes "## v0.1.X
+gh release upload v$ver -R PeanutsDou/deepseekcode release\latest.yml --clobber
+```
+
+### 8. 创建 GitHub Release（仅 changelog）
+
+不传安装包（服务器才是分发源）：
+
+```bash
+gh release create v$ver -R PeanutsDou/deepseekcode \
+  --title "v$ver" \
+  --notes "## v$ver
 
 ### 改动
 - xxx
-- yyy" \
-  release\dsc-setup-0.1.X.exe \
-  release\dsc-setup-0.1.X.exe.blockmap \
-  release\latest.yml
+- yyy
+
+### 下载
+[服务器直链](http://111.229.84.47/deepseekcode/dsc-setup-$ver.exe)"
 ```
 
-## 重要注意事项
+## 服务器管理
 
-| 问题 | 原因 | 解决 |
-|------|------|------|
-| 文件名含空格 | electron-builder 产物命名 | 重命名为短横线/点分隔 |
-| latest.yml 与资产不匹配 | gh release upload 会把空格转成点 | 重命名后手动生成 latest.yml |
-| 管理员权限必需 | winCodeSign 解压 macOS dylib 符号链接 | 右键管理员运行终端 |
-| 国内下载慢 | GitHub 下载速度不稳定 | 后续版本加入 GH Proxy |
+### Nginx 配置
 
-## 自动更新链路
+默认 `/var/www/html/deepseekcode/` 即服务目录，已配置好。
 
-```
-electron-builder → .exe + latest.yml → gh release upload → GitHub Release
-    ↓
-用户客户端（已安装旧版） → autoUpdater.checkForUpdates()
-    → 读取 latest.yml → 对比版本 → 下载 .exe → 验证 SHA512
-    → update-downloaded 事件 → 用户点击安装 → quitAndInstall()
+### 清理旧版本
+
+发布新版本后，可 SSH 到服务器删除旧 exe：
+
+```bash
+ssh -i ~/.ssh/peanutsDouAI.pem ubuntu@111.229.84.47 "rm /var/www/html/deepseekcode/dsc-setup-oldver.exe"
 ```
 
-## 构建配置要点
+### 带宽
 
-`package.json` 中的 `build` 配置：
+服务器为腾讯云轻量，约 3Mbps 出站带宽。133MB 安装包下载约 6 分钟。
+
+## 差异更新说明
+
+- 首次跨分发通道的更新（如手动安装 → 自动更新通道）为全量下载
+- 后续自动更新自动使用 blockmap 差异，仅下载变化部分
+- 差异越小（如只改 README），更新越快
+
+## 构建配置
+
+`package.json` 中 `build` 字段：
 
 ```json
 {
-  "build": {
-    "appId": "com.peanuts.deepseekcode",
-    "productName": "DeepSeek Code",
-    "win": {
-      "icon": "resources/icon.ico",
-      "target": [{ "target": "nsis", "arch": ["x64"] }]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "PeanutsDou",
-      "repo": "deepseekcode"
-    }
+  "win": {
+    "target": [{ "target": "nsis", "arch": ["x64"] }],
+    "icon": "resources/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  },
+  "publish": {
+    "provider": "generic",
+    "url": "http://111.229.84.47/deepseekcode/"
   }
 }
 ```
 
-- `win.icon` 指定应用图标（必须有，否则用默认 Electron 图标）
-- `nsis.oneClick: false` 允许用户选择安装目录
-- `publish.provider: "github"` 启用 electron-updater 从 GitHub Release 拉取更新
+## 自动更新链路
+
+```
+autoUpdater.checkForUpdates()
+  → 读取 generic provider url → http://111.229.84.47/deepseekcode/latest.yml
+  → 对比版本 → 有新版本？
+    → 下载 dsc-setup-newver.exe（全量） 或 差异更新（blockmap 对比）
+    → 验证 SHA512
+    → update-downloaded 事件
+    → 用户点击安装 → quitAndInstall()
+```
