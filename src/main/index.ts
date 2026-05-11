@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, Tray, Menu, nativeImage, ipcMain } from 'electron';
+﻿import { app, BrowserWindow, screen, Tray, Menu, nativeImage, ipcMain } from 'electron';
 import path from 'path';
 import { autoUpdater } from 'electron-updater';
 import { setupIpcHandlers } from './ipc-handlers';
@@ -23,6 +23,15 @@ function setupAutoUpdater(): void {
 
   // Auto-download in background, notify when ready
   autoUpdater.autoDownload = true;
+
+  // Use GH proxy for faster downloads in China
+  const origSetFeedURL = autoUpdater.setFeedURL.bind(autoUpdater);
+  autoUpdater.setFeedURL = function(options: any) {
+    if (options?.url && options.url.includes('github.com')) {
+      options.url = options.url.replace('https://github.com', 'https://ghproxy.net/https://github.com');
+    }
+    return origSetFeedURL(options);
+  };
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('update-available', (info) => {
