@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 import type { Provider } from '../agent/runtime';
-import type { Message, ToolCall } from '../agent/types';
+import type { Message, ProviderUsage, ToolCall } from '../agent/types';
 
 export interface AnthropicConfig {
   apiKey: string;
@@ -87,6 +87,17 @@ function toAnthropicTools(tools: { type: string; function: { name: string; descr
   }));
 }
 
+function parseUsage(usage: unknown): ProviderUsage | undefined {
+  const u = usage as Record<string, unknown> | undefined;
+  if (!u || typeof u.input_tokens !== 'number') return undefined;
+  return {
+    inputTokens: u.input_tokens as number,
+    outputTokens: (u.output_tokens as number | undefined) ?? 0,
+    cacheCreationInputTokens: u.cache_creation_input_tokens as number | undefined,
+    cacheReadInputTokens: u.cache_read_input_tokens as number | undefined,
+  };
+}
+
 export function createAnthropicProvider(config: AnthropicConfig): Provider {
   const client = new Anthropic({ apiKey: config.apiKey });
 
@@ -113,6 +124,7 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
       const toolCallsByIndex = new Map<number, ToolCall>();
       let text = '';
       let reasoningContent = '';
+      let usage: ProviderUsage | undefined;
 
       stream.on('text', (chunk) => {
         text += chunk;
@@ -139,6 +151,7 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
 
       try {
         const result = await stream.finalMessage();
+        usage = parseUsage(result.usage);
         // Process any content blocks for tool calls
         for (const block of result.content) {
           if (block.type === 'tool_use') {
@@ -159,7 +172,7 @@ export function createAnthropicProvider(config: AnthropicConfig): Provider {
 
       const toolCalls = [...toolCallsByIndex.values()].filter(tc => tc.name);
 
-      return { text, reasoningContent: reasoningContent || undefined, toolCalls };
+      return { text, reasoningContent: reasoningContent || undefined, toolCalls, usage };
     },
   };
 }

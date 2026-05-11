@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { Provider } from '../agent/runtime';
-import type { Message, ToolCall } from '../agent/types';
+import type { Message, ProviderUsage, ToolCall } from '../agent/types';
 
 export interface OpenAIConfig {
   baseUrl: string;
@@ -44,6 +44,17 @@ function toApiMessages(messages: Message[]): unknown[] {
 
     return { role: msg.role, content: msg.content };
   });
+}
+
+function parseUsage(raw: unknown): ProviderUsage | undefined {
+  const usage = raw as Record<string, unknown> | undefined;
+  if (!usage || typeof usage.input_tokens !== 'number' && typeof usage.prompt_tokens !== 'number') return undefined;
+  return {
+    inputTokens: (usage.input_tokens as number | undefined) ?? (usage.prompt_tokens as number | undefined) ?? 0,
+    outputTokens: (usage.output_tokens as number | undefined) ?? (usage.completion_tokens as number | undefined) ?? 0,
+    cacheCreationInputTokens: usage.cache_creation_input_tokens as number | undefined,
+    cacheReadInputTokens: usage.cache_read_input_tokens as number | undefined,
+  };
 }
 
 export function createOpenAIProvider(config: OpenAIConfig): Provider {
@@ -99,6 +110,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           tools: tools.length > 0 ? tools : undefined,
           tool_choice: tools.length > 0 ? 'auto' : undefined,
           stream: config.stream !== false,
+          stream_options: config.stream !== false ? { include_usage: true } : undefined,
           temperature: config.temperature ?? 0,
           max_tokens: config.maxTokens ?? 16384,
         }),
@@ -117,6 +129,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
       if (!response.body) {
         const json = (await response.json()) as Record<string, unknown>;
         const message = (json?.choices as Array<Record<string, unknown>>)?.[0]?.message as Record<string, unknown> ?? {};
+        const usage = parseUsage(json.usage);
         text = typeof message.content === 'string' ? message.content : '';
         reasoningContent = typeof message.reasoning_content === 'string' ? message.reasoning_content : '';
         if (text) onDelta?.(text);
@@ -135,6 +148,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           text,
           reasoningContent: reasoningContent || undefined,
           toolCalls: [...toolCallsByIndex.values()].filter(tc => tc.name),
+          usage,
         };
       }
 
@@ -142,6 +156,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let usage: ProviderUsage | undefined;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -166,6 +181,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           }
 
           const delta = (parsed?.choices as Array<Record<string, unknown>>)?.[0]?.delta as Record<string, unknown>;
+          if (parsed.usage) usage = parseUsage(parsed.usage);
           if (!delta) continue;
 
           const chunk = typeof delta.content === 'string' ? delta.content : '';
@@ -205,7 +221,7 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
         .map(tc => ({ id: tc.id || randomUUID(), name: tc.name, argumentsText: tc.argumentsText || '{}' }))
         .filter(tc => tc.name);
 
-      return { text, reasoningContent: reasoningContent || undefined, toolCalls };
+      return { text, reasoningContent: reasoningContent || undefined, toolCalls, usage };
     },
   };
 }

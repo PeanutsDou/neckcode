@@ -1,10 +1,16 @@
 import { randomUUID } from 'crypto';
-import type { Message, ToolCall, Attachment } from './types';
+import type { Message, ToolCall, Attachment, ProviderUsage } from './types';
 import { estimateMessageTokens } from './token-counter';
+
+export interface UsageAnchor {
+  usage: ProviderUsage;
+  messageCount: number;
+}
 
 export class ChatSession {
   private messages: Message[] = [];
   private checkpoints: Message[][] = [];
+  private usageAnchor: UsageAnchor | null = null;
 
   constructor(private systemPrompt?: string) {}
 
@@ -23,6 +29,14 @@ export class ChatSession {
       reasoningContent: reasoningContent || undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     });
+  }
+
+  recordUsage(usage?: ProviderUsage): void {
+    if (!usage) return;
+    this.usageAnchor = {
+      usage,
+      messageCount: this.messages.length,
+    };
   }
 
   addToolResult(toolCallId: string, content: string): void {
@@ -51,12 +65,16 @@ export class ChatSession {
     if (index < this.checkpoints.length) {
       this.messages = [...this.checkpoints[index]];
       this.checkpoints = this.checkpoints.slice(0, index);
+      if (this.usageAnchor && this.usageAnchor.messageCount > this.messages.length) {
+        this.usageAnchor = null;
+      }
     }
   }
 
   setMessages(messages: Message[]): void {
     this.messages = messages;
     this.checkpoints = [];
+    this.usageAnchor = null;
   }
 
   getMessages(): Message[] {
@@ -66,6 +84,7 @@ export class ChatSession {
   clear(): void {
     this.messages = [];
     this.checkpoints = [];
+    this.usageAnchor = null;
   }
 
   getMessageCount(): number {
@@ -85,6 +104,9 @@ export class ChatSession {
       this.messages = this.messages.slice(0, lastUserIdx);
     }
     this.checkpoints = [];
+    if (this.usageAnchor && this.usageAnchor.messageCount > this.messages.length) {
+      this.usageAnchor = null;
+    }
   }
 
   /** Estimate the token footprint of the complete provider message list. */
@@ -92,9 +114,23 @@ export class ChatSession {
     return estimateMessageTokens(this.toMessages());
   }
 
-  /** Compact: replace early messages with a system summary, keeping recent turn groups intact */
-  compact(keepRecentTurns: number, maxSummaryChars: number = 12000): boolean {
-    // Count turns from the end: a turn = user + assistant + any following tool messages
+  estimateTokensFromUsage(): { tokens: number; source: 'usage' | 'estimate' } {
+    if (!this.usageAnchor) {
+      return { tokens: this.estimateTokens(), source: 'estimate' };
+    }
+    const { usage, messageCount } = this.usageAnchor;
+    const baseTokens = usage.inputTokens +
+      usage.outputTokens +
+      (usage.cacheCreationInputTokens || 0) +
+      (usage.cacheReadInputTokens || 0);
+    const newMessages = this.messages.slice(messageCount);
+    return {
+      tokens: baseTokens + estimateMessageTokens(newMessages),
+      source: 'usage',
+    };
+  }
+
+  getCompactionParts(keepRecentTurns: number): { earlyMessages: Message[]; recentMessages: Message[] } | null {
     let turnCount = 0;
     let cutoff = -1;
     for (let i = this.messages.length - 1; i >= 0; i--) {
@@ -108,42 +144,23 @@ export class ChatSession {
       }
     }
 
-    if (cutoff <= 0) return false;
-
-    const earlyMessages = this.messages.slice(0, cutoff);
-    const recentMessages = this.messages.slice(cutoff);
-
-    const summaryParts: string[] = [];
-    let summaryChars = 0;
-    const pushSummaryPart = (text: string) => {
-      if (summaryChars >= maxSummaryChars) return;
-      const remaining = maxSummaryChars - summaryChars;
-      const clipped = text.length > remaining ? `${text.slice(0, Math.max(0, remaining - 3))}...` : text;
-      summaryParts.push(clipped);
-      summaryChars += clipped.length + 1;
+    if (cutoff <= 0) return null;
+    return {
+      earlyMessages: this.messages.slice(0, cutoff),
+      recentMessages: this.messages.slice(cutoff),
     };
+  }
 
-    for (const m of earlyMessages) {
-      if (m.role === 'system') {
-        pushSummaryPart(m.content);
-      } else if (m.role === 'user') {
-        pushSummaryPart(`User: ${m.content.slice(0, 1000)}`);
-      } else if (m.role === 'assistant') {
-        const toolNames = m.toolCalls?.map(tc => tc.name).filter(Boolean).join(', ');
-        pushSummaryPart(`Assistant${toolNames ? ` (tool calls: ${toolNames})` : ''}: ${m.content.slice(0, 1000)}`);
-        for (const tc of m.toolCalls || []) {
-          pushSummaryPart(`Tool call ${tc.name} args: ${tc.argumentsText.slice(0, 800)}`);
-        }
-      } else if (m.role === 'tool') {
-        pushSummaryPart(`Tool result ${m.toolCallId || 'unknown'}: ${m.content.slice(0, 800)}`);
-      }
-    }
-
-    const summary = `[Prior conversation summary - ${earlyMessages.length} messages compressed]\n${summaryParts.join('\n')}`;
+  replaceWithCompactSummary(summary: string, recentMessages: Message[]): void {
     this.messages = [
-      { role: 'system', content: summary },
+      {
+        role: 'system',
+        content: `[Compact boundary]\nPrior conversation was summarized to preserve context.\n\n${summary}`,
+      },
       ...recentMessages,
     ];
-    return true;
+    this.checkpoints = [];
+    this.usageAnchor = null;
   }
+
 }

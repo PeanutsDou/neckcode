@@ -13,7 +13,8 @@ const api = {
   abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
   resetAgent: (sessionId: string) => ipcRenderer.invoke('agent:reset', sessionId),
   setAgentContext: (sessionId: string, messages: unknown[], modelId?: string) => ipcRenderer.invoke('agent:set-context', sessionId, messages, modelId),
-  getAgentContextStatus: (sessionId: string) => ipcRenderer.invoke('agent:context-status', sessionId),
+  getAgentContextStatus: (sessionId: string) => ipcRenderer.invoke('agent:get-context-status', sessionId),
+  refreshAgentContextStatus: (sessionId: string) => ipcRenderer.invoke('agent:refresh-context-status', sessionId),
   setSessionModel: (sessionId: string, modelId: string) => ipcRenderer.invoke('session:set-model', sessionId, modelId),
 
   // Agent events

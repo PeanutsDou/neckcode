@@ -93,10 +93,10 @@ ipcMain.handle('close:choice', async (_event, action: string, remember: boolean)
   }
 });
 
-function createProvider(): Provider {
+function createProvider(modelOverride?: string): Provider {
   const cfg = getConfig();
-  const active = getActiveProvider();
-  const model = cfg.activeModel;
+  const model = modelOverride || cfg.activeModel;
+  const active = cfg.providers.find(p => p.models.some(m => m.name === model)) || getActiveProvider();
 
   const modelCfg = getModelConfig(model);
   const maxTokens = modelCfg?.maxTokens || cfg.agent.maxTokens;

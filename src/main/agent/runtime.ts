@@ -1,5 +1,6 @@
 import { ChatSession } from './session';
 import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message, Attachment, ContextStatus } from './types';
+import { ContextManager, type ContextManagerConfig } from './context-manager';
 
 function partitionToolCalls(toolCalls: ToolCall[], toolDefs: ToolDefinition[]): { concurrent: boolean; calls: ToolCall[] }[] {
   const batches: { concurrent: boolean; calls: ToolCall[] }[] = [];
@@ -34,15 +35,19 @@ export interface ToolRegistry {
 
 export class AgentRuntime {
   private session: ChatSession;
+  private contextManager: ContextManager;
 
   constructor(
     private provider: Provider,
     private tools: ToolRegistry,
     private maxTurns: number,
     systemPrompt?: string,
-    private contextLimit: number = 1_000_000,
+    contextConfig: ContextManagerConfig | number = 1_000_000,
   ) {
     this.session = new ChatSession(systemPrompt);
+    this.contextManager = new ContextManager(typeof contextConfig === 'number'
+      ? { contextLimit: contextConfig, maxTokens: 20_000 }
+      : contextConfig);
   }
 
   loadMessages(messages: Message[]): void {
@@ -54,27 +59,7 @@ export class AgentRuntime {
   }
 
   getContextStatus(): ContextStatus {
-    return {
-      estimatedTokens: this.session.estimateTokens(),
-      contextLimit: this.contextLimit,
-    };
-  }
-
-  private compactIfNeeded(callbacks?: AgentCallbacks): ContextStatus & { compacted: boolean } {
-    let estimatedTokens = this.session.estimateTokens();
-    let compacted = false;
-    if (estimatedTokens > this.contextLimit * 0.8) {
-      compacted = this.session.compact(5);
-      estimatedTokens = this.session.estimateTokens();
-    }
-
-    const status = {
-      estimatedTokens,
-      contextLimit: this.contextLimit,
-      compacted,
-    };
-    callbacks?.onContextUpdate?.(status);
-    return status;
+    return this.contextManager.getStatus(this.session);
   }
 
   clear(): void {
@@ -95,7 +80,7 @@ export class AgentRuntime {
           throw new Error('Aborted');
         }
 
-        this.compactIfNeeded(callbacks);
+        await this.contextManager.compactIfNeeded(this.session, this.provider, callbacks.onContextUpdate, signal);
         callbacks.onModelRequest?.();
         const step = await this.provider.runStep({
           messages: this.session.toMessages(),
@@ -107,6 +92,8 @@ export class AgentRuntime {
         });
 
         this.session.addAssistantStep(step.text, step.reasoningContent || '', step.toolCalls);
+        this.contextManager.recordUsage(this.session, step.usage);
+        callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
 
         if (step.toolCalls.length === 0) {
           callbacks.onComplete?.(step);
@@ -126,6 +113,7 @@ export class AgentRuntime {
             );
             for (const { tc, result } of results) {
               this.session.addToolResult(tc.id, result);
+              callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
               callbacks.onToolResult?.(tc, result);
             }
           } else {
@@ -134,6 +122,7 @@ export class AgentRuntime {
               callbacks.onToolStart?.(tc);
               const result = await this.tools.execute(tc);
               this.session.addToolResult(tc.id, result);
+              callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
               callbacks.onToolResult?.(tc, result);
             }
           }
@@ -145,6 +134,7 @@ export class AgentRuntime {
       if (!signal?.aborted) {
         // Unexpected error: roll back this turn
         this.session.restore(checkpoint);
+        callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
       }
       callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       throw error;

@@ -85,9 +85,24 @@ export interface RunState {
   lastTool?: string | null;
   inputTokens: number;
   outputTokens: number;
+  currentTokens: number;
   estimatedTokens: number;
   contextLimit: number;
+  effectiveWindow: number;
+  reservedOutputTokens: number;
+  autoCompactThreshold: number;
+  autoCompactBufferTokens: number;
+  blockingThreshold: number;
+  freeTokens: number;
+  percentUsed: number;
+  willAutoCompact: boolean;
+  contextSource?: 'usage' | 'estimate';
+  compacting?: boolean;
   compacted?: boolean;
+  lastCompactAt?: number | null;
+  compactCount?: number;
+  compactError?: string | null;
+  consecutiveCompactFailures?: number;
   errorCode?: AgentErrorCode | null;
 }
 

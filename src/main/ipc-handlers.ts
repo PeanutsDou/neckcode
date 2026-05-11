@@ -5,7 +5,8 @@ import { homedir } from 'os';
 import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
-import type { Message } from './agent/types';
+import type { ContextStatus, Message } from './agent/types';
+import { AUTO_COMPACT_BUFFER_TOKENS, BLOCKING_BUFFER_TOKENS, MAX_RESERVED_OUTPUT_TOKENS } from './agent/context-manager';
 import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig } from './config';
 import type { AppConfigData, ProviderConfig } from './config';
 import type { PermissionMode } from '../shared/permissions';
@@ -252,21 +253,81 @@ function ensurePath(workspaceRoot: string, inputPath: string): string {
 }
 
 export function setupIpcHandlers(
-  getProvider: () => Provider,
+  getProvider: (modelId?: string) => Provider,
   getTools: (sessionId?: string) => ToolRegistry,
 ) {
-  function getActiveContextLimit(sessionId?: string): number {
+  function getSessionModelId(sessionId?: string): string {
     const cfg = getConfig();
-    const modelId = sessionId ? sessionModels.get(sessionId) || cfg.activeModel : cfg.activeModel;
+    return sessionId ? sessionModels.get(sessionId) || cfg.activeModel : cfg.activeModel;
+  }
+
+  function getContextConfig(sessionId?: string): { contextLimit: number; maxTokens: number } {
+    const cfg = getConfig();
+    const modelId = getSessionModelId(sessionId);
     const mc = getModelConfig(modelId);
-    return mc?.contextLimit || cfg.agent.contextLimit || 128_000;
+    return {
+      contextLimit: mc?.contextLimit || cfg.agent.contextLimit || 128_000,
+      maxTokens: mc?.maxTokens || cfg.agent.maxTokens || 16_384,
+    };
   }
 
   function createSessionAgent(sessionId: string, messages?: Message[]): AgentRuntime {
     const cfg = getConfig();
-    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit(sessionId));
+    const modelId = getSessionModelId(sessionId);
+    const agent = new AgentRuntime(getProvider(modelId), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getContextConfig(sessionId));
     if (messages?.length) agent.loadMessages(messages);
     return agent;
+  }
+
+  function contextStatusToRunStatus(status: ContextStatus): Partial<RunStatusEvent> {
+    return {
+      currentTokens: status.currentTokens,
+      estimatedTokens: status.estimatedTokens,
+      contextLimit: status.contextLimit,
+      effectiveWindow: status.effectiveWindow,
+      reservedOutputTokens: status.reservedOutputTokens,
+      autoCompactThreshold: status.autoCompactThreshold,
+      autoCompactBufferTokens: status.autoCompactBufferTokens,
+      blockingThreshold: status.blockingThreshold,
+      freeTokens: status.freeTokens,
+      percentUsed: status.percentUsed,
+      willAutoCompact: status.willAutoCompact,
+      contextSource: status.source,
+      compacting: status.compacting,
+      compacted: status.compacted,
+      lastCompactAt: status.lastCompactAt,
+      compactCount: status.compactCount,
+      compactError: status.compactError,
+      consecutiveCompactFailures: status.consecutiveCompactFailures,
+    };
+  }
+
+  function emptyContextStatus(sessionId?: string): ContextStatus {
+    const { contextLimit, maxTokens } = getContextConfig(sessionId);
+    const reservedOutputTokens = Math.min(maxTokens, MAX_RESERVED_OUTPUT_TOKENS);
+    const effectiveWindow = Math.max(0, contextLimit - reservedOutputTokens);
+    const autoCompactThreshold = Math.max(0, effectiveWindow - AUTO_COMPACT_BUFFER_TOKENS);
+    const blockingThreshold = Math.max(0, effectiveWindow - BLOCKING_BUFFER_TOKENS);
+    return {
+      currentTokens: 0,
+      estimatedTokens: 0,
+      contextLimit,
+      effectiveWindow,
+      reservedOutputTokens,
+      autoCompactThreshold,
+      autoCompactBufferTokens: AUTO_COMPACT_BUFFER_TOKENS,
+      blockingThreshold,
+      freeTokens: effectiveWindow,
+      percentUsed: 0,
+      willAutoCompact: false,
+      source: 'estimate',
+      compacting: false,
+      compacted: false,
+      lastCompactAt: null,
+      compactCount: 0,
+      compactError: null,
+      consecutiveCompactFailures: 0,
+    };
   }
 
   function cancelPendingInteractionsForSession(sessionId: string, reason: string): void {
@@ -323,9 +384,7 @@ export function setupIpcHandlers(
           onContextUpdate(status) {
             emitRunStatus(sessionId, {
               phase: 'requesting_model',
-              estimatedTokens: status.estimatedTokens,
-              contextLimit: status.contextLimit,
-              compacted: status.compacted,
+              ...contextStatusToRunStatus(status),
             });
           },
           onDelta(text) {
@@ -386,16 +445,14 @@ export function setupIpcHandlers(
   }
 
   function getOrCreateSessionAgent(sessionId: string): AgentRuntime {
-    const cfg = getConfig();
     const existing = sessionAgents.get(sessionId);
     if (existing) {
       const messages = existing.getMessages();
-      const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit(sessionId));
-      agent.loadMessages(messages);
+      const agent = createSessionAgent(sessionId, messages);
       sessionAgents.set(sessionId, agent);
       return agent;
     }
-    const agent = new AgentRuntime(getProvider(), getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit(sessionId));
+    const agent = createSessionAgent(sessionId);
     sessionAgents.set(sessionId, agent);
     return agent;
   }
@@ -436,7 +493,7 @@ export function setupIpcHandlers(
 
   ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
     return runAgentTurnSerial(sessionId, async (abortCtrl) => {
-      const p = getProvider();
+      const p = getProvider(getSessionModelId(sessionId));
       if (!p) throw new Error('No provider configured');
       const sessionAgent = getOrCreateSessionAgent(sessionId);
       return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
@@ -445,7 +502,7 @@ export function setupIpcHandlers(
 
   ipcMain.handle('agent:regenerate', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
     return runAgentTurnSerial(sessionId, async (abortCtrl) => {
-      const p = getProvider();
+      const p = getProvider(getSessionModelId(sessionId));
       if (!p) throw new Error('No provider configured');
       const sessionAgent = getOrCreateSessionAgent(sessionId);
       sessionAgent.removeLastUserTurn();
@@ -462,6 +519,12 @@ export function setupIpcHandlers(
 
   ipcMain.handle('session:set-model', (_event, sessionId: string, modelId: string) => {
     sessionModels.set(sessionId, modelId);
+    const existing = sessionAgents.get(sessionId);
+    if (existing) {
+      const agent = createSessionAgent(sessionId, existing.getMessages());
+      sessionAgents.set(sessionId, agent);
+      emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(agent.getContextStatus()) });
+    }
   });
 
   ipcMain.handle('agent:reset', (_event, sessionId: string) => {
@@ -471,28 +534,33 @@ export function setupIpcHandlers(
     cancelPendingInteractionsForSession(sessionId, 'Session reset');
   });
 
-  ipcMain.handle('agent:set-context', async (_event, sessionId: string, messages: Array<{ role: string; content: string }>) => {
-    const p = getProvider();
+  ipcMain.handle('agent:set-context', async (_event, sessionId: string, messages: Array<{ role: string; content: string }>, modelId?: string) => {
+    if (modelId) sessionModels.set(sessionId, modelId);
+    const p = getProvider(getSessionModelId(sessionId));
     if (!p) throw new Error('No provider configured');
-    const cfg = getConfig();
-    const agent = new AgentRuntime(p, getTools(sessionId), cfg.agent.maxTurns, buildFullPrompt(), getActiveContextLimit());
+    const agent = createSessionAgent(sessionId);
     agent.loadMessages(messages as any);
     sessionAgents.set(sessionId, agent);
     const context = agent.getContextStatus();
-    emitRunStatus(sessionId, { phase: 'idle', ...context, compacted: false });
+    emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(context), compacted: false });
     return context;
   });
 
-  ipcMain.handle('agent:context-status', (_event, sessionId: string) => {
+  function getContextStatusForSession(sessionId: string): ContextStatus {
     try {
       return getOrCreateSessionAgent(sessionId).getContextStatus();
     } catch {
-      return {
-        estimatedTokens: 0,
-        contextLimit: getActiveContextLimit(),
-      };
+      return emptyContextStatus(sessionId);
     }
+  }
+
+  ipcMain.handle('agent:get-context-status', (_event, sessionId: string) => getContextStatusForSession(sessionId));
+  ipcMain.handle('agent:refresh-context-status', (_event, sessionId: string) => {
+    const status = getContextStatusForSession(sessionId);
+    emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(status) });
+    return status;
   });
+  ipcMain.handle('agent:context-status', (_event, sessionId: string) => getContextStatusForSession(sessionId));
 
   // Ask-user-question round-trip
   ipcMain.handle('ask:respond', (_event, askId: string, answers: Record<string, string> | null) => {

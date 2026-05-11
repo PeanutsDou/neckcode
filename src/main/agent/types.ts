@@ -33,16 +33,40 @@ export interface RunStepResult {
   text: string;
   reasoningContent?: string;
   toolCalls: ToolCall[];
+  usage?: ProviderUsage;
+}
+
+export interface ProviderUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 export interface ContextStatus {
+  currentTokens: number;
   estimatedTokens: number;
   contextLimit: number;
+  effectiveWindow: number;
+  reservedOutputTokens: number;
+  autoCompactThreshold: number;
+  autoCompactBufferTokens: number;
+  blockingThreshold: number;
+  freeTokens: number;
+  percentUsed: number;
+  willAutoCompact: boolean;
+  source: 'usage' | 'estimate';
+  compacting: boolean;
+  compacted?: boolean;
+  lastCompactAt?: number | null;
+  compactCount?: number;
+  compactError?: string | null;
+  consecutiveCompactFailures?: number;
 }
 
 export interface AgentCallbacks {
   onModelRequest?: () => void;
-  onContextUpdate?: (status: ContextStatus & { compacted: boolean }) => void;
+  onContextUpdate?: (status: ContextStatus) => void;
   onDelta?: (text: string) => void;
   onReasoning?: (text: string) => void;
   onToolStart?: (toolCall: ToolCall) => void;

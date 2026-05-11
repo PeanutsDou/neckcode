@@ -35,6 +35,6 @@ export function useStreamMetric(
   }, [isStreaming, tokens.input, tokens.output]);
 
   const toolLabel = runState.currentTool ? ` ${runState.currentTool}` : '';
-  const phaseLabel = phaseLabels[runState.phase] || '';
+  const phaseLabel = runState.compacting ? '正在压缩上下文' : phaseLabels[runState.phase] || '';
   return `${fmtTime(elapsed)} · ↑ ${fmtTokens(tokens.input)} ↓ ${fmtTokens(tokens.output)} tokens${phaseLabel ? ` · ${phaseLabel}${toolLabel}` : ''}`;
 }
