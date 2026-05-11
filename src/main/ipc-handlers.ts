@@ -553,6 +553,7 @@ export function setupIpcHandlers(
       }
     }
     return {
+      version: require('../../package.json').version,
       model: cfg.activeModel,
       models: getAllModelNames(),
       modelContexts,

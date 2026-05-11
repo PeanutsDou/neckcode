@@ -117,6 +117,7 @@ export default function App() {
         useAppStore.getState().setLightScheme(normalizeLightScheme(c.lightScheme));
         useAppStore.getState().setFontScale(c.fontScale || 100);
         useAppStore.getState().setModel(c.model);
+        if (c.version) setVersion(c.version);
         useAppStore.getState().setAvailableModels(c.models || []);
         if (c.codeLeftWidth) setCodeLeftWidth(c.codeLeftWidth);
       }).catch(() => {});
@@ -157,6 +158,7 @@ export default function App() {
           <div className="toolbar-left">
             <img src="./icon.png" className="toolbar-icon" alt="" />
             <span className="toolbar-title">DeepSeek Code</span>
+            <span className="toolbar-version" style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>v{version}</span>
           </div>
           <div className="toolbar-center" />
           <div className="toolbar-right">
