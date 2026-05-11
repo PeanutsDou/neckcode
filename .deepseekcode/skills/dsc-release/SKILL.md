@@ -20,6 +20,26 @@ description: DeepSeek Code 版本构建与发布流程。TRIGGER when: 用户要
 | 自建服务器（nginx） | 安装包分发 | http://111.229.84.47/deepseekcode/ |
 | GitHub Release | 版本历史 & changelog | https://github.com/PeanutsDou/deepseekcode/releases |
 
+## ⚠️ 发布前必做：开发环境验证
+
+**在构建安装包之前，必须确认 dev 模式能正常运行！**
+
+```bash
+# 1. 启动 dev server
+cd D:\douzhongjun\deepseekcode
+npm run dev
+
+# 2. 确认以下几点：
+#    - Electron 窗口正常打开
+#    - UI 渲染正常，不白屏
+#    - 能发送消息、接收回复
+#    - 功能正常（版本号显示、模型切换、session 管理等）
+
+# 3. 确认无误后，Ctrl+C 停止 dev server，再构建
+```
+
+**永远不要不经 dev 验证就直接 `npm run dist`。** 已发生的事故：v0.1.8 未验证导致白屏。
+
 ## 前置条件
 
 - **管理员权限**终端（winCodeSign 签名需要）
@@ -32,7 +52,8 @@ description: DeepSeek Code 版本构建与发布流程。TRIGGER when: 用户要
 ### 1. 版本号
 
 ```bash
-npm version minor  # 或 npm version patch，或手动改 package.json
+cd D:\douzhongjun\deepseekcode
+node -e "const p=require('./package.json');p.version='0.1.X';require('fs').writeFileSync('./package.json',JSON.stringify(p,null,2)+'\n')"
 ```
 
 ### 2. 构建
@@ -48,21 +69,15 @@ npm run dist
 
 electron-builder 产出文件名含空格，重命名：
 
-```bash
-cd D:\douzhongjun\deepseekcode
+```powershell
 $ver = "0.1.X"
-$exeFile = "release\DeepSeek Code Setup $ver.exe"
-$blockFile = "release\DeepSeek Code Setup $ver.exe.blockmap"
-Move-Item -LiteralPath $exeFile -Destination "release\dsc-setup-$ver.exe" -Force
-Move-Item -LiteralPath $blockFile -Destination "release\dsc-setup-$ver.exe.blockmap" -Force
+Move-Item -LiteralPath "release\DeepSeek Code Setup $ver.exe" -Destination "release\dsc-setup-$ver.exe" -Force
+Move-Item -LiteralPath "release\DeepSeek Code Setup $ver.exe.blockmap" -Destination "release\dsc-setup-$ver.exe.blockmap" -Force
 ```
 
 ### 4. 生成 latest.yml
 
-必须包含 exe 和 blockmap 两个文件条目（差异更新需要 blockmap）：
-
 ```powershell
-$ver = "0.1.X"
 $exe = Get-Item "release\dsc-setup-$ver.exe"
 $block = Get-Item "release\dsc-setup-$ver.exe.blockmap"
 $exeHash = (Get-FileHash $exe.FullName -Algorithm SHA512).Hash.ToLower()
@@ -71,17 +86,17 @@ $blockHash = (Get-FileHash $block.FullName -Algorithm SHA512).Hash.ToLower()
 $latest = @"
 version: $ver
 files:
-  - url: dsc-setup-$ver.exe
+  - url: http://111.229.84.47/deepseekcode/dsc-setup-$ver.exe
     sha512: $exeHash
     size: $($exe.Length)
-  - url: dsc-setup-$ver.exe.blockmap
+  - url: http://111.229.84.47/deepseekcode/dsc-setup-$ver.exe.blockmap
     sha512: $blockHash
     size: $($block.Length)
 path: dsc-setup-$ver.exe
 sha512: $exeHash
 releaseDate: '$(Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ")'
 "@
-[System.IO.File]::WriteAllText("release\latest.yml", $latest, [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText("$pwd\release\latest.yml", $latest, [System.Text.Encoding]::UTF8)
 ```
 
 ### 5. 上传到服务器
@@ -92,9 +107,10 @@ scp -i ~/.ssh/peanutsDouAI.pem release\dsc-setup-$ver.exe.blockmap ubuntu@111.22
 scp -i ~/.ssh/peanutsDouAI.pem release\latest.yml ubuntu@111.229.84.47:/var/www/html/deepseekcode/
 ```
 
-验证：
+清理旧版本（服务器只保留最新一个）：
+
 ```bash
-ssh -i ~/.ssh/peanutsDouAI.pem ubuntu@111.229.84.47 "ls -la /var/www/html/deepseekcode/"
+ssh -i ~/.ssh/peanutsDouAI.pem ubuntu@111.229.84.47 "rm -f /var/www/html/deepseekcode/dsc-setup-旧版本号.exe*"
 ```
 
 ### 6. 提交代码 + Tag
@@ -106,17 +122,9 @@ git tag v$ver
 git push origin master --tags
 ```
 
-### 7. 上传 latest.yml 到 GitHub（关键！）
+### 7. 创建 GitHub Release（包含 latest.yml）
 
-**这一步不能省。** 已经安装旧版的用户从 GitHub 检测更新，读到 latest.yml 后从服务器下载。
-
-```bash
-gh release upload v$ver -R PeanutsDou/deepseekcode release\latest.yml --clobber
-```
-
-### 8. 创建 GitHub Release（仅 changelog）
-
-不传安装包（服务器才是分发源）：
+**latest.yml 必须上传到 GitHub Release**。已安装旧版的用户通过 GitHub 检测到新版本，再从服务器下载。
 
 ```bash
 gh release create v$ver -R PeanutsDou/deepseekcode \
@@ -128,36 +136,28 @@ gh release create v$ver -R PeanutsDou/deepseekcode \
 - yyy
 
 ### 下载
-[服务器直链](http://111.229.84.47/deepseekcode/dsc-setup-$ver.exe)"
+[服务器直链](http://111.229.84.47/deepseekcode/dsc-setup-$ver.exe)" \
+  release\latest.yml
 ```
 
 ## 服务器管理
 
-### Nginx 配置
+| 项目 | 详情 |
+|------|------|
+| IP | 111.229.84.47 |
+| 用户 | ubuntu |
+| SSH Key | `~/.ssh/peanutsDouAI.pem` |
+| Web 目录 | `/var/www/html/deepseekcode/` |
+| 带宽 | ~3Mbps 出站 |
+| 防火墙 | 端口 80 已开放（备注：dc版本管理） |
 
-默认 `/var/www/html/deepseekcode/` 即服务目录，已配置好。
+## 差异更新
 
-### 清理旧版本
+- 首次从手动安装迁移到自动更新 → 全量下载
+- 后续自动更新 → 对比 blockmap，只下载变化部分
+- blockmap 必须随安装包一起上传
 
-发布新版本后，可 SSH 到服务器删除旧 exe：
-
-```bash
-ssh -i ~/.ssh/peanutsDouAI.pem ubuntu@111.229.84.47 "rm /var/www/html/deepseekcode/dsc-setup-oldver.exe"
-```
-
-### 带宽
-
-服务器为腾讯云轻量，约 3Mbps 出站带宽。133MB 安装包下载约 6 分钟。
-
-## 差异更新说明
-
-- 首次跨分发通道的更新（如手动安装 → 自动更新通道）为全量下载
-- 后续自动更新自动使用 blockmap 差异，仅下载变化部分
-- 差异越小（如只改 README），更新越快
-
-## 构建配置
-
-`package.json` 中 `build` 字段：
+## 包配置
 
 ```json
 {
@@ -174,16 +174,4 @@ ssh -i ~/.ssh/peanutsDouAI.pem ubuntu@111.229.84.47 "rm /var/www/html/deepseekco
     "url": "http://111.229.84.47/deepseekcode/"
   }
 }
-```
-
-## 自动更新链路
-
-```
-autoUpdater.checkForUpdates()
-  → 读取 generic provider url → http://111.229.84.47/deepseekcode/latest.yml
-  → 对比版本 → 有新版本？
-    → 下载 dsc-setup-newver.exe（全量） 或 差异更新（blockmap 对比）
-    → 验证 SHA512
-    → update-downloaded 事件
-    → 用户点击安装 → quitAndInstall()
 ```
