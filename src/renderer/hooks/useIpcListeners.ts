@@ -19,6 +19,26 @@ export function useIpcListeners() {
     unsubs.push(api.onRunStatus((sid, status: any) => {
       store.getState().setRunStatusTo(sid, status);
     }));
+    unsubs.push(api.onQueuedCount((sid, count: number) => {
+      window.dispatchEvent(new CustomEvent('agent-queued-count', { detail: { sid, count } }));
+    }));
+    unsubs.push(api.onQueuedMessageStart((sid, data: any) => {
+      const attachments = Array.isArray(data.attachments)
+        ? data.attachments.map((att: any, i: number) => ({
+          type: att.type || 'image',
+          data: att.data,
+          name: att.name || `queued-${i + 1}.png`,
+          size: att.size || 0,
+        }))
+        : undefined;
+      store.getState().addEntryTo(sid, {
+        id: data.id || `queued_${Date.now()}`,
+        role: 'user',
+        content: data.content || '',
+        attachments,
+        timestamp: Date.now(),
+      });
+    }));
     unsubs.push(api.onToolStart((sid, data: any) => {
       store.getState().addEntryTo(sid, {
         id: data.id || `tool_${Date.now()}`,

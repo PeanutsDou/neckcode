@@ -18,7 +18,7 @@ const statusLabels: Record<SessionStatus, string> = {
 export function SessionList() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const { loadEntries, removeSession, startNew, switchTo } = useChatStore();
+  const { loadEntries, removeSession, startNew, switchTo, setSessionModelTo } = useChatStore();
   const activeId = useChatStore(s => s.activeId);
   const localSessions = useChatStore(s => s.sessions);
 
@@ -56,8 +56,13 @@ export function SessionList() {
     if (renaming) renameRef.current?.focus();
   }, [renaming]);
 
-  const handleNew = () => {
-    startNew();
+  const handleNew = async () => {
+    try {
+      const cfg = await window.electronAPI?.getConfig();
+      startNew(cfg?.model);
+    } catch {
+      startNew();
+    }
   };
 
   const handleLoad = async (id: string) => {
@@ -66,9 +71,9 @@ export function SessionList() {
       setSessionId(id);
       switchTo(id);
       // 恢复此 session 的模型
-      const savedModel = sessions.find(x => x.id === id)?.modelId;
+      const savedModel = localSessions[id]?.modelId || sessions.find(x => x.id === id)?.modelId;
       if (savedModel) {
-        useAppStore.getState().setModel(savedModel);
+        setSessionModelTo(id, savedModel);
         window.electronAPI?.setSessionModel?.(id, savedModel);
       }
       return;
@@ -90,14 +95,15 @@ export function SessionList() {
         toolResult: msg.toolResult,
         timestamp: msg.timestamp || Date.now(),
       }));
-      loadEntries(s.id, chatEntries);
+      const modelId = s.modelId || useAppStore.getState().currentModel;
+      loadEntries(s.id, chatEntries, modelId);
 
       const agentMessages = Array.isArray(s.agentMessages) && s.agentMessages.length > 0
         ? s.agentMessages
         : (s.messages || [])
           .filter(msg => msg.role === 'user' || msg.role === 'assistant')
           .map(msg => ({ role: msg.role, content: msg.content, attachments: msg.attachments }));
-      window.electronAPI?.setAgentContext?.(s.id, agentMessages, s.modelId || '');
+      window.electronAPI?.setAgentContext?.(s.id, agentMessages, modelId);
     } catch (err) {
       console.error('Failed to load session:', err);
     }
@@ -161,7 +167,7 @@ export function SessionList() {
     displayedSessions.push({
       id,
       title: firstUser ? firstUser.slice(0, 50) : 'Untitled',
-      modelId: 'unknown',
+      modelId: local.modelId || 'unknown',
       updatedAt: lastTimestamp || Date.now(),
       status: getSessionStatus(local),
     });

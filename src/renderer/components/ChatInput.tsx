@@ -16,6 +16,24 @@ interface ImageAttachment {
   size: number;
 }
 
+interface QueuedSend {
+  sid: string;
+  message: string;
+  modelId?: string;
+  uiAttachments: {
+    type: 'image';
+    data: string;
+    mimeType: string;
+    name: string;
+    size: number;
+  }[];
+  apiAttachments: {
+    type: 'image';
+    data: string;
+    mimeType: string;
+  }[];
+}
+
 interface SkillInfo {
   name: string;
   description: string;
@@ -35,6 +53,7 @@ export function ChatInput() {
   const [commandIdx, setCommandIdx] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const cmdListRef = useRef<HTMLDivElement>(null);
+  const [queuedCount, setQueuedCount] = useState(0);
   const { addEntryTo, setStreamingTo, setPendingContext, focusVersion } = useChatStore();
   const isStreaming = useActiveIsStreaming();
   const pendingContext = useActivePendingContext();
@@ -43,6 +62,16 @@ export function ChatInput() {
   useEffect(() => {
     inputRef.current?.focus();
   }, [focusVersion]);
+  useEffect(() => {
+    const updateQueuedCount = (event: Event) => {
+      const detail = (event as CustomEvent<{ sid: string; count: number }>).detail;
+      if (!detail) return;
+      const activeSid = getSessionId();
+      if (!activeSid || activeSid === detail.sid) setQueuedCount(detail.count);
+    };
+    window.addEventListener('agent-queued-count', updateQueuedCount);
+    return () => window.removeEventListener('agent-queued-count', updateQueuedCount);
+  }, []);
   const { setModel, setAvailableModels, availableModels, currentModel } = useAppStore();
   const [skillCommands, setSkillCommands] = useState<SlashCommand[]>([]);
 
@@ -51,7 +80,10 @@ export function ChatInput() {
       const cfg = await window.electronAPI?.getConfig();
       if (!cfg) return;
       setAvailableModels(cfg.models || []);
-      if (cfg.model) setModel(cfg.model);
+      const sid = getSessionId();
+      const sessionModel = sid ? useChatStore.getState().sessions[sid]?.modelId : null;
+      if (sessionModel) setModel(sessionModel);
+      else if (cfg.model) setModel(cfg.model);
     } catch {
       // Keep the current cached list if config refresh fails.
     }
@@ -149,6 +181,33 @@ export function ChatInput() {
     }
   }, [setPendingContext]);
 
+  const sendPayload = useCallback(async (payload: QueuedSend, addToUi = true) => {
+    if (payload.modelId) {
+      useChatStore.getState().setSessionModelTo(payload.sid, payload.modelId);
+      await window.electronAPI?.setSessionModel?.(payload.sid, payload.modelId).catch(() => {});
+    }
+
+    if (addToUi) {
+      addEntryTo(payload.sid, {
+        id: Date.now().toString(),
+        role: 'user',
+        content: payload.message,
+        attachments: payload.uiAttachments,
+        timestamp: Date.now(),
+      });
+      setStreamingTo(payload.sid, true);
+    }
+
+    try {
+      const result = await window.electronAPI.sendMessage(payload.sid, payload.message, payload.apiAttachments);
+      if (result?.queued && typeof result.queuedCount === 'number') {
+        setQueuedCount(result.queuedCount);
+      }
+    } catch (err) {
+      useChatStore.getState().setErrorTo(payload.sid, err instanceof Error ? err.message : String(err));
+    }
+  }, [addEntryTo, setStreamingTo]);
+
   const handleSend = async () => {
     if (!canSend) return;
     if (showCommands && filteredCommands.length > 0 && text.trim() === filteredCommands[commandIdx]?.name) {
@@ -160,24 +219,30 @@ export function ChatInput() {
     if (pendingContext) message = `${message}\n\n\`\`\`\n${pendingContext}\n\`\`\``;
 
     const sid = useChatStore.getState().ensureActiveSession();
-    const attachments = images.map(img => ({ type: 'image' as const, data: img.data, mimeType: 'image/png', name: img.name, size: img.size }));
-    addEntryTo(sid, { id: Date.now().toString(), role: 'user', content: message, attachments, timestamp: Date.now() });
+    const modelId = useChatStore.getState().sessions[sid]?.modelId || currentModel;
+    const payload: QueuedSend = {
+      sid,
+      message,
+      modelId,
+      uiAttachments: images.map(img => ({ type: 'image' as const, data: img.data, mimeType: 'image/png', name: img.name, size: img.size })),
+      apiAttachments: images.map(img => ({
+        type: 'image' as const,
+        data: img.data,
+        mimeType: img.data.startsWith('data:image/png') ? 'image/png' : img.data.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
+      })),
+    };
+    const shouldQueue = useChatStore.getState().sessions[sid]?.isStreaming;
 
     setText('');
     setImages([]);
     setPendingContext(null);
-    setStreamingTo(sid, true);
 
-    try {
-      const apiAttachments = images.map(img => ({
-        type: 'image' as const,
-        data: img.data,
-        mimeType: img.data.startsWith('data:image/png') ? 'image/png' : img.data.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
-      }));
-      await window.electronAPI.sendMessage(sid, message, apiAttachments);
-    } catch (err) {
-      useChatStore.getState().setErrorTo(sid, err instanceof Error ? err.message : String(err));
+    if (shouldQueue) {
+      void sendPayload(payload, false);
+      return;
     }
+
+    void sendPayload(payload, true);
   };
 
   const handleStop = () => {
@@ -218,6 +283,12 @@ export function ChatInput() {
             <button className="pending-context-dismiss" onClick={() => setPendingContext(null)}>&times;</button>
           </div>
         )}
+        {queuedCount > 0 && (
+          <div className="pending-context pending-send">
+            <span className="pending-context-label">待发送</span>
+            <span className="pending-context-preview">{queuedCount} 条消息将在下一个安全间隙发送</span>
+          </div>
+        )}
         {images.length > 0 && (
           <div className="image-previews">
             {images.map((img, i) => (
@@ -240,7 +311,16 @@ export function ChatInput() {
             value={currentModel}
             options={availableModels}
             onOpen={refreshModels}
-            onChange={(m) => { setModel(m); window.electronAPI?.setConfig('model', m); const sid = getSessionId(); if (sid) window.electronAPI?.setSessionModel?.(sid, m); }}
+            onChange={(m) => {
+              const sid = getSessionId();
+              if (sid) {
+                useChatStore.getState().setSessionModelTo(sid, m);
+                window.electronAPI?.setSessionModel?.(sid, m);
+              } else {
+                setModel(m);
+                window.electronAPI?.setConfig('model', m);
+              }
+            }}
           />
 
           {isStreaming && (
@@ -250,7 +330,7 @@ export function ChatInput() {
               </svg>
             </button>
           )}
-          <button className="send-btn" onClick={handleSend} disabled={!canSend} title={isStreaming ? '发送补充消息（先中断当前任务）' : '发送'}>
+          <button className="send-btn" onClick={handleSend} disabled={!canSend} title={isStreaming ? '排队发送（下一个安全间隙发送）' : '发送'}>
             <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="7" y1="11" x2="7" y2="3" />
               <polyline points="4,6 7,3 10,6" />

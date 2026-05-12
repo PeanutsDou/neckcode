@@ -53,6 +53,16 @@ const api = {
     ipcRenderer.on('agent:run-status', listener);
     return () => { ipcRenderer.removeListener('agent:run-status', listener); };
   },
+  onQueuedMessageStart: (cb: (sid: string, data: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
+    ipcRenderer.on('agent:queued-message-start', listener);
+    return () => { ipcRenderer.removeListener('agent:queued-message-start', listener); };
+  },
+  onQueuedCount: (cb: (sid: string, count: number) => void) => {
+    const listener = (_event: unknown, sid: string, count: number) => cb(sid, count);
+    ipcRenderer.on('agent:queued-count', listener);
+    return () => { ipcRenderer.removeListener('agent:queued-count', listener); };
+  },
   onError: (cb: (sid: string, error: unknown) => void) => {
     const listener = (_event: unknown, sid: string, error: unknown) => cb(sid, error);
     ipcRenderer.on('agent:error', listener);

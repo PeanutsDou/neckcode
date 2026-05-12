@@ -5,8 +5,8 @@ import { homedir } from 'os';
 import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
-import type { ContextStatus, Message } from './agent/types';
-import { AUTO_COMPACT_BUFFER_TOKENS, BLOCKING_BUFFER_TOKENS, MAX_RESERVED_OUTPUT_TOKENS } from './agent/context-manager';
+import type { Attachment, ContextStatus, Message, QueuedUserMessage } from './agent/types';
+import { BLOCKING_BUFFER_TOKENS, MAX_RESERVED_OUTPUT_TOKENS, getAutoCompactThreshold } from './agent/context-manager';
 import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig, inferModelMode } from './config';
 import { VisionInterpreter } from './agent/vision-interpreter';
 import type { AppConfigData, ProviderConfig } from './config';
@@ -33,6 +33,7 @@ export const pendingConfirms = new Map<string, { sessionId: string; resolve: (ap
 const sessionAgents = new Map<string, AgentRuntime>();
 const sessionAbortControllers = new Map<string, AbortController>();
 const sessionRunningTurns = new Map<string, Promise<unknown>>();
+const sessionQueuedTurns = new Map<string, QueuedUserMessage[]>();
 const sessionModels = new Map<string, string>();
 
 let currentPermissionMode: PermissionMode = getConfig().permissionMode || 'default';
@@ -80,6 +81,47 @@ function emitRunStatus(sessionId: string, status: RunStatusEvent): void {
     ...status,
     lastEventAt: status.lastEventAt || Date.now(),
   });
+}
+
+function emitQueuedCount(sessionId: string): void {
+  getWindow()?.webContents.send('agent:queued-count', sessionId, sessionQueuedTurns.get(sessionId)?.length || 0);
+}
+
+function emitQueuedMessageStart(sessionId: string, message: QueuedUserMessage): void {
+  getWindow()?.webContents.send('agent:queued-message-start', sessionId, message);
+}
+
+function enqueueQueuedTurn(sessionId: string, message: string, attachments: Attachment[]): QueuedUserMessage {
+  const queued: QueuedUserMessage = {
+    id: `queued_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    content: message,
+    attachments,
+  };
+  const queue = sessionQueuedTurns.get(sessionId) || [];
+  queue.push(queued);
+  sessionQueuedTurns.set(sessionId, queue);
+  emitQueuedCount(sessionId);
+  return queued;
+}
+
+function normalizeAttachments(attachments: Array<{ type: string; data: string; mimeType: string }> = []): Attachment[] {
+  return attachments
+    .filter(att => att.type === 'image')
+    .map(att => ({ type: 'image', data: att.data, mimeType: att.mimeType }));
+}
+
+function takeQueuedTurn(sessionId: string): QueuedUserMessage | null {
+  const queue = sessionQueuedTurns.get(sessionId);
+  const queued = queue?.shift() || null;
+  if (queue && queue.length === 0) sessionQueuedTurns.delete(sessionId);
+  emitQueuedCount(sessionId);
+  return queued;
+}
+
+function clearQueuedTurns(sessionId: string): void {
+  if (!sessionQueuedTurns.has(sessionId)) return;
+  sessionQueuedTurns.delete(sessionId);
+  emitQueuedCount(sessionId);
 }
 
 function normalizeOpenAIBaseUrl(baseUrl: string): string {
@@ -262,7 +304,15 @@ export function setupIpcHandlers(
 ) {
   function getSessionModelId(sessionId?: string): string {
     const cfg = getConfig();
-    return sessionId ? sessionModels.get(sessionId) || cfg.activeModel : cfg.activeModel;
+    if (!sessionId) return cfg.activeModel;
+    const cached = sessionModels.get(sessionId);
+    if (cached) return cached;
+    const savedModel = loadSession(sessionId)?.modelId;
+    if (savedModel) {
+      sessionModels.set(sessionId, savedModel);
+      return savedModel;
+    }
+    return cfg.activeModel;
   }
 
   function getContextConfig(sessionId?: string): { contextLimit: number; maxTokens: number } {
@@ -323,7 +373,7 @@ export function setupIpcHandlers(
     const { contextLimit, maxTokens } = getContextConfig(sessionId);
     const reservedOutputTokens = Math.min(maxTokens, MAX_RESERVED_OUTPUT_TOKENS);
     const effectiveWindow = Math.max(0, contextLimit - reservedOutputTokens);
-    const autoCompactThreshold = Math.max(0, effectiveWindow - AUTO_COMPACT_BUFFER_TOKENS);
+    const autoCompactThreshold = getAutoCompactThreshold(effectiveWindow);
     const blockingThreshold = Math.max(0, effectiveWindow - BLOCKING_BUFFER_TOKENS);
     return {
       currentTokens: 0,
@@ -332,7 +382,7 @@ export function setupIpcHandlers(
       effectiveWindow,
       reservedOutputTokens,
       autoCompactThreshold,
-      autoCompactBufferTokens: AUTO_COMPACT_BUFFER_TOKENS,
+      autoCompactBufferTokens: Math.max(0, effectiveWindow - autoCompactThreshold),
       blockingThreshold,
       freeTokens: effectiveWindow,
       percentUsed: 0,
@@ -445,6 +495,12 @@ export function setupIpcHandlers(
               result,
             });
           },
+          takeQueuedUserMessage() {
+            return takeQueuedTurn(sessionId);
+          },
+          onQueuedUserMessage(queued) {
+            emitQueuedMessageStart(sessionId, queued);
+          },
           onComplete(step) {
             flushDelta();
             emitRunStatus(sessionId, { phase: 'finishing', currentTool: null });
@@ -512,8 +568,20 @@ export function setupIpcHandlers(
     return ctrl;
   }
 
+  function startQueuedTurnIfIdle(sessionId: string): void {
+    if (sessionRunningTurns.has(sessionId)) return;
+    const queued = takeQueuedTurn(sessionId);
+    if (!queued) return;
+    emitQueuedMessageStart(sessionId, queued);
+    void runAgentTurnSerial(sessionId, async (abortCtrl) => {
+      const p = getProvider(getSessionModelId(sessionId));
+      if (!p) throw new Error('No provider configured');
+      const sessionAgent = getOrCreateSessionAgent(sessionId);
+      return runAgentTurnWithStreaming(sessionId, sessionAgent, queued.content, queued.attachments, abortCtrl);
+    });
+  }
+
   async function runAgentTurnSerial(sessionId: string, runFn: (abortCtrl: AbortController) => Promise<unknown>): Promise<unknown> {
-    abortCurrentRun(sessionId);
     const prev = sessionRunningTurns.get(sessionId);
     if (prev) await prev.catch(() => {});
     const abortCtrl = newRunController(sessionId);
@@ -524,16 +592,22 @@ export function setupIpcHandlers(
     } finally {
       if (sessionRunningTurns.get(sessionId) === promise) {
         sessionRunningTurns.delete(sessionId);
+        startQueuedTurnIfIdle(sessionId);
       }
     }
   }
 
   ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
+    const normalizedAttachments = normalizeAttachments(attachments || []);
+    if (sessionRunningTurns.has(sessionId)) {
+      const queued = enqueueQueuedTurn(sessionId, message, normalizedAttachments);
+      return { queued: true, queuedId: queued.id, queuedCount: sessionQueuedTurns.get(sessionId)?.length || 0 };
+    }
     return runAgentTurnSerial(sessionId, async (abortCtrl) => {
       const p = getProvider(getSessionModelId(sessionId));
       if (!p) throw new Error('No provider configured');
       const sessionAgent = getOrCreateSessionAgent(sessionId);
-      return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
+      return runAgentTurnWithStreaming(sessionId, sessionAgent, message, normalizedAttachments, abortCtrl);
     });
   });
 
@@ -543,19 +617,22 @@ export function setupIpcHandlers(
       if (!p) throw new Error('No provider configured');
       const sessionAgent = getOrCreateSessionAgent(sessionId);
       sessionAgent.removeLastUserTurn();
-      return runAgentTurnWithStreaming(sessionId, sessionAgent, message, attachments || [], abortCtrl);
+      return runAgentTurnWithStreaming(sessionId, sessionAgent, message, normalizeAttachments(attachments || []), abortCtrl);
     });
   });
 
   ipcMain.handle('agent:abort', (_event, sessionId: string) => {
     sessionAbortControllers.get(sessionId)?.abort();
     sessionAbortControllers.delete(sessionId);
+    clearQueuedTurns(sessionId);
     cancelPendingInteractionsForSession(sessionId, 'Session aborted');
     emitRunStatus(sessionId, { phase: 'aborted', currentTool: null, errorCode: 'aborted' });
   });
 
   ipcMain.handle('session:set-model', (_event, sessionId: string, modelId: string) => {
     sessionModels.set(sessionId, modelId);
+    const saved = loadSession(sessionId);
+    if (saved) saveSession({ ...saved, modelId, updatedAt: Date.now() });
     const existing = sessionAgents.get(sessionId);
     if (existing) {
       const agent = createSessionAgent(sessionId, existing.getMessages());
@@ -568,6 +645,7 @@ export function setupIpcHandlers(
     sessionAgents.delete(sessionId);
     sessionAbortControllers.delete(sessionId);
     sessionModels.delete(sessionId);
+    clearQueuedTurns(sessionId);
     cancelPendingInteractionsForSession(sessionId, 'Session reset');
   });
 
@@ -893,6 +971,7 @@ export function setupIpcHandlers(
     sessionAbortControllers.delete(id);
     sessionAgents.delete(id);
     sessionModels.delete(id);
+    clearQueuedTurns(id);
     cancelPendingInteractionsForSession(id, 'Session deleted');
     deleteSession(id);
   });

@@ -72,6 +72,15 @@ export class AgentRuntime {
     this.session.removeLastUserTurn();
   }
 
+  private appendQueuedUserMessages(callbacks: AgentCallbacks): void {
+    while (true) {
+      const queued = callbacks.takeQueuedUserMessage?.();
+      if (!queued) return;
+      this.session.addUserMessage(queued.content, queued.attachments);
+      callbacks.onQueuedUserMessage?.(queued);
+    }
+  }
+
   async runUserTurn(userMessage: string, attachments: Attachment[], callbacks: AgentCallbacks, signal?: AbortSignal): Promise<RunStepResult> {
     let checkpoint = -1;
 
@@ -98,6 +107,7 @@ export class AgentRuntime {
           throw new Error('Aborted');
         }
 
+        this.appendQueuedUserMessages(callbacks);
         await this.contextManager.compactIfNeeded(this.session, this.provider, callbacks.onContextUpdate, signal);
         callbacks.onModelRequest?.();
         const step = await this.provider.runStep({
@@ -145,6 +155,8 @@ export class AgentRuntime {
             }
           }
         }
+
+        this.appendQueuedUserMessages(callbacks);
       }
 
       throw new Error(`Agent stopped after ${this.maxTurns} turns`);

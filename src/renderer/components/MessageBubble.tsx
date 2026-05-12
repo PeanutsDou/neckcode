@@ -26,7 +26,8 @@ export function MessageBubble({ entry }: Props) {
   const handleRegenerate = useCallback(() => {
     const state = useChatStore.getState();
     const sid = state.activeId || 'default';
-    const allEntries = state.sessions[sid]?.entries || [];
+    const session = state.sessions[sid];
+    const allEntries = session?.entries || [];
     const myIdx = allEntries.findIndex(e => e.id === entry.id);
     if (myIdx < 0) return;
     let userMsg = '';
@@ -46,9 +47,15 @@ export function MessageBubble({ entry }: Props) {
       const previousEntries = allEntries;
       state.trimEntriesFrom(sid, myIdx);
       state.setStreamingTo(sid, true);
-      void window.electronAPI.regenerate(sid, userMsg, userAttachments).catch(err => {
+      void (async () => {
+        if (session?.modelId) {
+          state.setSessionModelTo(sid, session.modelId);
+          await window.electronAPI.setSessionModel?.(sid, session.modelId).catch(() => {});
+        }
+        await window.electronAPI.regenerate(sid, userMsg, userAttachments);
+      })().catch(err => {
         const next = useChatStore.getState();
-        next.loadEntries(sid, previousEntries);
+        next.loadEntries(sid, previousEntries, session?.modelId);
         next.setErrorTo(sid, err instanceof Error ? err.message : String(err));
       });
     }

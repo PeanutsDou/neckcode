@@ -1,7 +1,7 @@
 import type { ChatSession } from './session';
 import type { ContextStatus, Message, ProviderUsage, RunStepResult, ToolDefinition } from './types';
 
-export const AUTO_COMPACT_BUFFER_TOKENS = 13_000;
+export const AUTO_COMPACT_THRESHOLD_RATIO = 0.6;
 export const MAX_RESERVED_OUTPUT_TOKENS = 20_000;
 export const BLOCKING_BUFFER_TOKENS = 3_000;
 const KEEP_RECENT_TURN_CANDIDATES = [5, 3, 2, 1] as const;
@@ -28,6 +28,10 @@ export class ContextLimitError extends Error {
   }
 }
 
+export function getAutoCompactThreshold(effectiveWindow: number): number {
+  return Math.max(1, Math.floor(effectiveWindow * AUTO_COMPACT_THRESHOLD_RATIO));
+}
+
 export class ContextManager {
   private lastCompactAt: number | null = null;
   private compactCount = 0;
@@ -46,7 +50,11 @@ export class ContextManager {
   }
 
   get autoCompactThreshold(): number {
-    return Math.max(1, this.effectiveWindow - AUTO_COMPACT_BUFFER_TOKENS);
+    return getAutoCompactThreshold(this.effectiveWindow);
+  }
+
+  get autoCompactBufferTokens(): number {
+    return Math.max(0, this.effectiveWindow - this.autoCompactThreshold);
   }
 
   get blockingThreshold(): number {
@@ -64,7 +72,7 @@ export class ContextManager {
       effectiveWindow: this.effectiveWindow,
       reservedOutputTokens: this.reservedOutputTokens,
       autoCompactThreshold: this.autoCompactThreshold,
-      autoCompactBufferTokens: AUTO_COMPACT_BUFFER_TOKENS,
+      autoCompactBufferTokens: this.autoCompactBufferTokens,
       blockingThreshold: this.blockingThreshold,
       freeTokens,
       percentUsed: Math.min(100, Math.round((currentTokens / this.effectiveWindow) * 100)),

@@ -64,6 +64,12 @@ export interface ContextStatus {
   consecutiveCompactFailures?: number;
 }
 
+export interface QueuedUserMessage {
+  id: string;
+  content: string;
+  attachments: Attachment[];
+}
+
 export interface AgentCallbacks {
   onModelRequest?: () => void;
   onVisionStart?: () => void;
@@ -73,6 +79,8 @@ export interface AgentCallbacks {
   onReasoning?: (text: string) => void;
   onToolStart?: (toolCall: ToolCall) => void;
   onToolResult?: (toolCall: ToolCall, result: string) => void;
+  takeQueuedUserMessage?: () => QueuedUserMessage | null;
+  onQueuedUserMessage?: (message: QueuedUserMessage) => void;
   onComplete?: (result: RunStepResult) => void;
   onError?: (error: Error) => void;
 }

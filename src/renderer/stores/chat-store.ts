@@ -16,6 +16,7 @@ export interface ChatEntry {
 
 export interface SessionState {
   entries: ChatEntry[];
+  modelId?: string;
   isStreaming: boolean;
   streamingText: string;
   thinkingText: string;
@@ -49,11 +50,12 @@ interface ChatState {
   setRunStatusTo: (sid: string, status: RunStatusEvent) => void;
   setRunTokensTo: (sid: string, inputTokens: number, outputTokens: number) => void;
   trimEntriesFrom: (sid: string, fromIndex: number) => void;
+  setSessionModelTo: (sid: string, modelId: string) => void;
 
   ensureActiveSession: () => string;
-  startNew: () => void;
+  startNew: (modelId?: string) => void;
   switchTo: (id: string) => void;
-  loadEntries: (id: string, entries: ChatEntry[]) => void;
+  loadEntries: (id: string, entries: ChatEntry[], modelId?: string) => void;
   removeSession: (id: string) => void;
   clearActive: () => void;
 }
@@ -91,8 +93,8 @@ function emptyRunState(): RunState {
 
 const EMPTY_RUN_STATE = emptyRunState();
 
-function emptySession(): SessionState {
-  return { entries: [], isStreaming: false, streamingText: '', thinkingText: '', error: null, pendingContext: null, runStartedAt: null, runState: emptyRunState() };
+function emptySession(modelId?: string): SessionState {
+  return { entries: [], modelId, isStreaming: false, streamingText: '', thinkingText: '', error: null, pendingContext: null, runStartedAt: null, runState: emptyRunState() };
 }
 
 function updateSession(
@@ -123,17 +125,20 @@ export function getSessionStatus(session?: SessionState): SessionStatus {
   return 'idle';
 }
 
-async function autoSave(sessionId: string, entries: ChatEntry[]) {
+async function autoSave(sessionId: string, entries: ChatEntry[], modelId?: string) {
   if (entries.length === 0) return;
 
   const firstUserMsg = entries.find(e => e.role === 'user')?.content || '';
   const isNew = !titlesGenerated.has(sessionId);
   const title = isNew ? (firstUserMsg.slice(0, 50) || 'Untitled') : undefined;
+  const resolvedModelId = modelId
+    || useChatStore.getState().sessions[sessionId]?.modelId
+    || useAppStore.getState().currentModel;
 
   const sessionData: Record<string, unknown> = {
     id: sessionId,
     projectPath: '',
-    modelId: useAppStore.getState().currentModel,
+    modelId: resolvedModelId,
     messages: entries,
     updatedAt: Date.now(),
   };
@@ -330,6 +335,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
+  setSessionModelTo(sid, modelId) {
+    set(state => updateSession(state, sid, ses => ({ ...ses, modelId })));
+    if (get().activeId === sid) useAppStore.getState().setModel(modelId);
+    const entries = get().sessions[sid]?.entries || [];
+    if (entries.length > 0) void autoSave(sid, entries, modelId);
+  },
+
   ensureActiveSession() {
     const existing = get().activeId;
     if (existing) {
@@ -338,17 +350,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     const id = createSessionId();
+    const modelId = useAppStore.getState().currentModel;
     currentSessionId = id;
     set(state => ({
       ...state,
       activeId: id,
-      sessions: { ...state.sessions, [id]: emptySession() },
+      sessions: { ...state.sessions, [id]: emptySession(modelId) },
     }));
     return id;
   },
 
-  startNew() {
+  startNew(modelId) {
     currentSessionId = null;
+    if (modelId) useAppStore.getState().setModel(modelId);
     set(state => {
       const { default: _defaultSession, ...rest } = state.sessions;
       return { ...state, activeId: null, sessions: rest };
@@ -357,20 +371,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   switchTo(id) {
     currentSessionId = id;
+    const modelId = get().sessions[id]?.modelId;
+    if (modelId) useAppStore.getState().setModel(modelId);
     set(state => ({
       ...state,
       activeId: id,
-      sessions: state.sessions[id] ? state.sessions : { ...state.sessions, [id]: emptySession() },
+      sessions: state.sessions[id] ? state.sessions : { ...state.sessions, [id]: emptySession(useAppStore.getState().currentModel) },
     }));
   },
 
-  loadEntries(id, entries) {
+  loadEntries(id, entries, modelId) {
     currentSessionId = id;
     titlesGenerated.add(id);
+    if (modelId) useAppStore.getState().setModel(modelId);
     set(state => ({
       ...state,
       activeId: id,
-      sessions: { ...state.sessions, [id]: { ...emptySession(), entries } },
+      sessions: { ...state.sessions, [id]: { ...emptySession(modelId), entries } },
     }));
   },
 

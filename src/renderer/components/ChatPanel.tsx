@@ -55,7 +55,7 @@ export function ChatPanel() {
   const streamMetric = useStreamMetric(entries, streamingText, thinkingText, isStreaming, runState, elapsed);
 
   // ── callbacks ──
-  const retryLast = () => {
+  const retryLast = async () => {
     const state = store.getState();
     const sid = state.activeId;
     if (!sid) return;
@@ -67,6 +67,10 @@ export function ChatPanel() {
     }));
     state.setErrorTo(sid, null);
     state.setStreamingTo(sid, true);
+    if (ses?.modelId) {
+      state.setSessionModelTo(sid, ses.modelId);
+      await window.electronAPI?.setSessionModel?.(sid, ses.modelId).catch(() => {});
+    }
     window.electronAPI?.sendMessage(sid, lastUser.content, attachments as any).catch(err => {
       store.getState().setErrorTo(sid, err instanceof Error ? err.message : String(err));
     });

@@ -5,25 +5,31 @@ import { useChatStore } from '../stores/chat-store';
 export function ModelSwitcher() {
   const { currentModel, availableModels, setModel, setAvailableModels } = useAppStore();
   const activeId = useChatStore(s => s.activeId);
+  const activeModelId = useChatStore(s => activeId ? s.sessions[activeId]?.modelId : null);
 
   useEffect(() => {
     const load = () => {
       window.electronAPI.getConfig().then(config => {
-        setModel(config.model);
         setAvailableModels(config.models);
+        if (activeModelId) setModel(activeModelId);
+        else setModel(config.model);
       }).catch(() => {});
     };
     load();
     const handler = () => load();
     window.addEventListener('providers-changed', handler);
     return () => window.removeEventListener('providers-changed', handler);
-  }, []);
+  }, [activeModelId, setAvailableModels, setModel]);
 
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newModel = e.target.value;
-    setModel(newModel);
-    window.electronAPI.setConfig('model', newModel).catch(console.error);
-    if (activeId) window.electronAPI.setSessionModel?.(activeId, newModel);
+    if (activeId) {
+      useChatStore.getState().setSessionModelTo(activeId, newModel);
+      window.electronAPI.setSessionModel?.(activeId, newModel);
+    } else {
+      setModel(newModel);
+      window.electronAPI.setConfig('model', newModel).catch(console.error);
+    }
   };
 
   return (
