@@ -12,3 +12,7 @@ src/**/*.d.ts
 src/**/*.d.ts.map
 
 .sessions/
+
+# Log files
+.tmp-electron-*.log
+dist-*.log
