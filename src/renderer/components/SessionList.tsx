@@ -6,14 +6,35 @@ interface SessionItem {
   id: string;
   title?: string;
   modelId?: string;
+  createdAt?: number;
   updatedAt?: number;
+  pinnedAt?: number | null;
 }
+
+type DisplaySession = SessionItem & { status: SessionStatus };
 
 const statusLabels: Record<SessionStatus, string> = {
   idle: '无任务',
   running: '进行中',
   error: '错误',
 };
+
+function isPinned(session: SessionItem): boolean {
+  return typeof session.pinnedAt === 'number' && session.pinnedAt > 0;
+}
+
+function compareSessions(a: SessionItem, b: SessionItem): number {
+  const aPinned = isPinned(a);
+  const bPinned = isPinned(b);
+  if (aPinned !== bPinned) return aPinned ? -1 : 1;
+  if (aPinned && bPinned) {
+    const pinnedCompare = (b.pinnedAt || 0) - (a.pinnedAt || 0);
+    if (pinnedCompare !== 0) return pinnedCompare;
+  }
+  const createdCompare = (a.createdAt || a.updatedAt || 0) - (b.createdAt || b.updatedAt || 0);
+  if (createdCompare !== 0) return createdCompare;
+  return a.id.localeCompare(b.id);
+}
 
 export function SessionList() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
@@ -136,6 +157,19 @@ export function SessionList() {
     setCtxMenu(null);
   };
 
+  const togglePinned = async () => {
+    if (!ctxMenu) return;
+    const id = ctxMenu.id;
+    const s = sessions.find(x => x.id === id);
+    setCtxMenu(null);
+    try {
+      await window.electronAPI?.setSessionPinned?.(id, !isPinned(s || { id }));
+      loadSessions();
+    } catch {
+      loadSessions();
+    }
+  };
+
   const commitRename = async () => {
     const newTitle = renameValue.trim();
     if (newTitle && renaming) {
@@ -154,7 +188,7 @@ export function SessionList() {
     }
   };
 
-  const displayedSessions: Array<SessionItem & { status: SessionStatus }> = sessions.map(s => ({
+  const displayedSessions: DisplaySession[] = sessions.map(s => ({
     ...s,
     status: getSessionStatus(localSessions[s.id]),
   }));
@@ -163,16 +197,20 @@ export function SessionList() {
     if (id === 'default' || persistedIds.has(id)) continue;
     if (local.entries.length === 0 && !local.isStreaming && !local.error) continue;
     const firstUser = local.entries.find(entry => entry.role === 'user')?.content;
+    const firstTimestamp = local.entries[0]?.timestamp;
     const lastTimestamp = local.entries[local.entries.length - 1]?.timestamp;
     displayedSessions.push({
       id,
       title: firstUser ? firstUser.slice(0, 50) : 'Untitled',
       modelId: local.modelId || 'unknown',
+      createdAt: firstTimestamp || lastTimestamp || Date.now(),
       updatedAt: lastTimestamp || Date.now(),
+      pinnedAt: null,
       status: getSessionStatus(local),
     });
   }
-  displayedSessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  displayedSessions.sort(compareSessions);
+  const ctxMenuSession = ctxMenu ? displayedSessions.find(s => s.id === ctxMenu.id) : null;
 
   return (
     <div className="session-list">
@@ -187,10 +225,12 @@ export function SessionList() {
         {displayedSessions.length === 0 && !loading && (
           <div className="session-list-empty">Send a message to auto-save</div>
         )}
-        {displayedSessions.map(s => (
+        {displayedSessions.map(s => {
+          const pinned = isPinned(s);
+          return (
           <div
             key={s.id}
-            className={`session-item ${activeId === s.id ? 'active' : ''}`}
+            className={`session-item ${activeId === s.id ? 'active' : ''} ${pinned ? 'pinned' : ''}`}
             onClick={() => handleLoad(s.id)}
             onContextMenu={e => handleContextMenu(e, s.id)}
           >
@@ -205,7 +245,10 @@ export function SessionList() {
                 onClick={e => e.stopPropagation()}
               />
             ) : (
-              <div className="session-item-title">{s.title || 'Untitled'}</div>
+              <div className="session-item-title-row">
+                <div className="session-item-title">{s.title || 'Untitled'}</div>
+                {pinned && <span className="session-pin-badge">置顶</span>}
+              </div>
             )}
             <div className="session-item-meta">
               <span className="session-item-model">{s.modelId || 'unknown'}</span>
@@ -225,11 +268,15 @@ export function SessionList() {
               x
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {ctxMenu && (
         <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+          <button className="ctx-menu-item" onClick={togglePinned}>
+            {ctxMenuSession && isPinned(ctxMenuSession) ? '取消置顶' : '置顶'}
+          </button>
           <button className="ctx-menu-item" onClick={startRename}>
             重命名
           </button>

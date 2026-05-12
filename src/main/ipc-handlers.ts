@@ -20,6 +20,7 @@ import {
   loadSession,
   renameSession,
   saveSession,
+  setSessionPinned,
   type SessionData,
 } from './session-store';
 
@@ -978,6 +979,10 @@ export function setupIpcHandlers(
 
   ipcMain.handle('session:rename', async (_event, id: string, newTitle: string) => {
     return renameSession(id, newTitle);
+  });
+
+  ipcMain.handle('session:set-pinned', async (_event, id: string, pinned: boolean) => {
+    return setSessionPinned(id, pinned);
   });
 
   ipcMain.handle('session:generate-title', async (_event, userMessage: string) => {

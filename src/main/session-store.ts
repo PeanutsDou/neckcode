@@ -12,6 +12,7 @@ export interface SessionData {
   agentMessages?: unknown[];
   createdAt?: number;
   updatedAt?: number;
+  pinnedAt?: number | null;
 }
 
 interface SessionRow {
@@ -23,6 +24,7 @@ interface SessionRow {
   agent_messages_json: string | null;
   created_at: number | null;
   updated_at: number | null;
+  pinned_at: number | null;
 }
 
 let db: Database.Database | null = null;
@@ -53,6 +55,7 @@ function rowToSession(row: SessionRow, includeMessages: boolean): SessionData {
     modelId: row.model_id || undefined,
     createdAt: row.created_at || undefined,
     updatedAt: row.updated_at || undefined,
+    pinnedAt: row.pinned_at ?? null,
   };
   if (includeMessages) {
     session.messages = parseArrayJson(row.messages_json);
@@ -76,10 +79,17 @@ export function getDb(): Database.Database {
       messages_json TEXT NOT NULL DEFAULT '[]',
       agent_messages_json TEXT NOT NULL DEFAULT '[]',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      pinned_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
   `);
+
+  const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+  if (!columns.some(col => col.name === 'pinned_at')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN pinned_at INTEGER');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_pinned_created_at ON sessions(pinned_at DESC, created_at ASC)');
 
   migrateLegacyJsonSessions(db);
   return db;
@@ -137,13 +147,14 @@ export function saveSession(session: SessionData): void {
     agentMessages: session.agentMessages ?? existing?.agentMessages ?? [],
     createdAt: session.createdAt || existing?.createdAt || now,
     updatedAt: session.updatedAt || now,
+    pinnedAt: session.pinnedAt !== undefined ? session.pinnedAt : existing?.pinnedAt ?? null,
   };
 
   database.prepare(`
     INSERT INTO sessions (
-      id, title, project_path, model_id, messages_json, agent_messages_json, created_at, updated_at
+      id, title, project_path, model_id, messages_json, agent_messages_json, created_at, updated_at, pinned_at
     ) VALUES (
-      @id, @title, @projectPath, @modelId, @messagesJson, @agentMessagesJson, @createdAt, @updatedAt
+      @id, @title, @projectPath, @modelId, @messagesJson, @agentMessagesJson, @createdAt, @updatedAt, @pinnedAt
     )
     ON CONFLICT(id) DO UPDATE SET
       title = excluded.title,
@@ -152,7 +163,8 @@ export function saveSession(session: SessionData): void {
       messages_json = excluded.messages_json,
       agent_messages_json = excluded.agent_messages_json,
       created_at = excluded.created_at,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at,
+      pinned_at = excluded.pinned_at
   `).run({
     id: merged.id,
     title: merged.title ?? null,
@@ -162,6 +174,7 @@ export function saveSession(session: SessionData): void {
     agentMessagesJson: JSON.stringify(merged.agentMessages || []),
     createdAt: merged.createdAt,
     updatedAt: merged.updatedAt,
+    pinnedAt: merged.pinnedAt ?? null,
   });
 }
 
@@ -172,7 +185,15 @@ export function loadSession(id: string): SessionData | null {
 
 export function listSessions(): SessionData[] {
   const rows = getDb()
-    .prepare('SELECT id, title, project_path, model_id, NULL AS messages_json, NULL AS agent_messages_json, created_at, updated_at FROM sessions ORDER BY updated_at DESC')
+    .prepare(`
+      SELECT id, title, project_path, model_id, NULL AS messages_json, NULL AS agent_messages_json, created_at, updated_at, pinned_at
+      FROM sessions
+      ORDER BY
+        CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END,
+        pinned_at DESC,
+        created_at ASC,
+        id ASC
+    `)
     .all() as SessionRow[];
   return rows.map(row => rowToSession(row, false));
 }
@@ -185,5 +206,12 @@ export function renameSession(id: string, title: string): boolean {
   const result = getDb()
     .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?')
     .run(title, Date.now(), id);
+  return result.changes > 0;
+}
+
+export function setSessionPinned(id: string, pinned: boolean): boolean {
+  const result = getDb()
+    .prepare('UPDATE sessions SET pinned_at = ? WHERE id = ?')
+    .run(pinned ? Date.now() : null, id);
   return result.changes > 0;
 }

@@ -105,6 +105,7 @@ const api = {
   listSessions: () => ipcRenderer.invoke('session:list'),
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id),
   renameSession: (id: string, title: string) => ipcRenderer.invoke('session:rename', id, title),
+  setSessionPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('session:set-pinned', id, pinned),
   generateTitle: (message: string) => ipcRenderer.invoke('session:generate-title', message),
 
   // Skills
