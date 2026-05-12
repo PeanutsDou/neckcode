@@ -376,6 +376,7 @@ export function setupIpcHandlers(
     let flushTimer: ReturnType<typeof setInterval> | null = null;
     let errorSent = false;
     let thinkingNotified = false;
+    let visionToolCallId: string | null = null;
     const flushDelta = () => {
       if (reasoningBuffer) {
         if (!thinkingNotified) { emitRunStatus(sessionId, { phase: 'thinking' }); thinkingNotified = true; }
@@ -400,11 +401,22 @@ export function setupIpcHandlers(
           },
           onVisionStart() {
             emitRunStatus(sessionId, { phase: 'analyzing_image', currentTool: null });
+            visionToolCallId = `vision_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            getWindow()?.webContents.send('agent:tool-start', sessionId, {
+              id: visionToolCallId,
+              name: 'vision_parse_image',
+              argumentsText: JSON.stringify({ mode: '视觉解析', output: '结构化视觉上下文' }),
+            });
           },
           onVisionResult(document) {
-            getWindow()?.webContents.send('agent:vision-result', sessionId, {
-              content: `<details>\n<summary>图片解析结果</summary>\n\n${document}\n\n</details>`,
+            const toolCallId = visionToolCallId || `vision_${Date.now()}`;
+            getWindow()?.webContents.send('agent:tool-result', sessionId, {
+              toolCallId,
+              name: 'vision_parse_image',
+              argumentsText: JSON.stringify({ mode: '视觉解析', output: '结构化视觉上下文' }),
+              result: document,
             });
+            visionToolCallId = null;
           },
           onContextUpdate(status) {
             emitRunStatus(sessionId, {

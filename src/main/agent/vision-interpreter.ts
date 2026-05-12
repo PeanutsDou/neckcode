@@ -8,64 +8,66 @@ interface ParsedTarget {
 }
 
 const FULL_IMAGE_PROMPT = `You are a vision parser for a text-only coding agent.
+你必须使用中文输出，除非图片中的原文、文件名、代码、控件文字本身是英文。章节标题也使用中文。
 Do not answer the user directly. Convert the image into a strict visual context document.
 Use the user's question as the attention signal. If they mention a region, UI element, color, overlap, readability, red box, left/right/top/bottom, progress bar, button, toolbar, or text, identify the relevant region first.
 
-Return Markdown with exactly these sections:
+Return Markdown with exactly these Chinese sections:
 [Visual Context]
-Image size: unknown until inferred from pixels if visible.
-Coordinate system: top-left origin, pixel units.
-Grid: 3x3
+图片尺寸: unknown until inferred from pixels if visible.
+坐标系: 左上角为原点，单位为像素。
+网格: 3x3
 
-## User Question
+## 用户问题
 <repeat the user question>
 
-## Attention Targets
-- target: <short label>
+## 关注区域
+- target: <short Chinese label>
   bbox: [x1,y1,x2,y2]
   grid: <A1-C3>
   confidence: <0-1>
-  reason: <why this region matters to the question>
+  reason: <Chinese explanation why this region matters to the question>
 
-## Global Summary
-<concise summary>
+## 全图概览
+<concise Chinese summary>
 
-## Focused Region Analysis
-<for the user-mentioned target, describe visual elements, OCR, colors, contrast, overlap/occlusion, and layout>
+## 重点区域分析
+<for the user-mentioned target, describe visual elements, OCR, colors, contrast, overlap/occlusion, and layout in Chinese>
 
 ## UI Issue Diagnosis
 - affected region: <bbox/grid>
-- observed issue: <concrete UI problem if any>
-- visual evidence: <coordinates, text, colors, overlap, contrast>
-- likely fix direction: <layout/style direction useful to a coding agent>
+- observed issue: <Chinese concrete UI problem if any>
+- visual evidence: <Chinese evidence with coordinates, text, colors, overlap, contrast>
+- likely fix direction: <Chinese layout/style direction useful to a coding agent>
 
-## Grid Observations
-- A1 [top-left]: ...
-- A2 [top-center]: ...
-- A3 [top-right]: ...
-- B1 [middle-left]: ...
-- B2 [middle-center]: ...
-- B3 [middle-right]: ...
-- C1 [bottom-left]: ...
-- C2 [bottom-center]: ...
-- C3 [bottom-right]: ...
+## 网格观察
+- A1 [左上]: ...
+- A2 [上中]: ...
+- A3 [右上]: ...
+- B1 [左中]: ...
+- B2 [中心]: ...
+- B3 [右中]: ...
+- C1 [左下]: ...
+- C2 [下中]: ...
+- C3 [右下]: ...
 
-## Uncertainties
-<anything unclear>
+## 不确定项
+<anything unclear, in Chinese>
 [/Visual Context]`;
 
 const FOCUSED_PROMPT = `You are refining a focused crop for a text-only coding agent.
+你必须使用中文输出，除非图片中的原文、文件名、代码、控件文字本身是英文。
 Describe only the crop. Be precise about visible text, colors, overlap, contrast, alignment, and UI defects.
 Return Markdown:
-## Focused Crop Refinement
+## 局部裁剪复查
 - crop id:
-- visible elements:
-- OCR/text:
-- colors/contrast:
-- overlap/occlusion:
-- UI issue diagnosis:
-- likely fix direction:
-- uncertainties:`;
+- 可见元素:
+- OCR/文字:
+- 颜色/对比度:
+- 重叠/遮挡:
+- UI 问题诊断:
+- 可能修复方向:
+- 不确定项:`;
 
 function dataUriToNativeImage(dataUri: string) {
   try {
@@ -173,7 +175,7 @@ export class VisionInterpreter {
       docs.push([
         `<!-- image ${i + 1} -->`,
         full.text.trim(),
-        refinements.length > 0 ? `\n## Programmatic Focused Crop Rechecks\n${refinements.join('\n\n')}` : '',
+        refinements.length > 0 ? `\n## 程序化局部裁剪复查\n${refinements.join('\n\n')}` : '',
       ].join('\n'));
     }
 

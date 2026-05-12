@@ -46,16 +46,6 @@ export function useIpcListeners() {
         store.setState({ sessions: { ...state.sessions, [sid]: { ...ses, entries } } });
       }
     }));
-    if (api.onVisionResult) {
-      unsubs.push(api.onVisionResult((sid, data: any) => {
-        store.getState().addEntryTo(sid, {
-          id: `vision_${Date.now()}`,
-          role: 'system',
-          content: data?.content || '',
-          timestamp: Date.now(),
-        });
-      }));
-    }
     unsubs.push(api.onTurnDone((sid, data: any) => {
       store.getState().finishStreamTo(sid, data.text);
     }));
