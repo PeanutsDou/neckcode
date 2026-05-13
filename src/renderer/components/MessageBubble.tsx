@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { memo, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -12,8 +12,27 @@ interface Props {
   entry: ChatEntry;
 }
 
-export function MessageBubble({ entry }: Props) {
+const LONG_MESSAGE_THRESHOLD = 60_000;
+const LONG_MESSAGE_HEAD = 24_000;
+const LONG_MESSAGE_TAIL = 6_000;
+
+function makeTextPreview(text: string): string {
+  if (text.length <= LONG_MESSAGE_THRESHOLD) return text;
+  const hidden = text.length - LONG_MESSAGE_HEAD - LONG_MESSAGE_TAIL;
+  return [
+    text.slice(0, LONG_MESSAGE_HEAD),
+    '',
+    `... 已折叠 ${hidden.toLocaleString()} 个字符 ...`,
+    '',
+    text.slice(-LONG_MESSAGE_TAIL),
+  ].join('\n');
+}
+
+export const MessageBubble = memo(function MessageBubble({ entry }: Props) {
   const [copied, setCopied] = useState(false);
+  const [showFullContent, setShowFullContent] = useState(false);
+  const isLongContent = entry.content.length > LONG_MESSAGE_THRESHOLD;
+  const visibleContent = isLongContent && !showFullContent ? makeTextPreview(entry.content) : entry.content;
 
   const handleCopy = useCallback(async () => {
     try {
@@ -120,35 +139,44 @@ export function MessageBubble({ entry }: Props) {
           </div>
         )}
         <div className="message-content">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkBreaks]}
-            components={{
-              code({ className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '');
-                const lang = match?.[1];
-                const code = String(children).replace(/\n$/, '');
+          {isLongContent && !showFullContent ? (
+            <>
+              <pre className="message-text-preview">{visibleContent}</pre>
+              <button className="message-expand-btn" onClick={() => setShowFullContent(true)}>
+                显示完整消息
+              </button>
+            </>
+          ) : (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkBreaks]}
+              components={{
+                code({ className, children, ...props }) {
+                  const match = /language-(\w+)/.exec(className || '');
+                  const lang = match?.[1];
+                  const code = String(children).replace(/\n$/, '');
 
-                if (lang === 'mermaid') {
-                  return <MermaidBlock code={code} />;
-                }
+                  if (lang === 'mermaid') {
+                    return <MermaidBlock code={code} />;
+                  }
 
-                if (className) {
-                  return (
-                    <pre><code className={className} {...props}>
-                      {children}
-                    </code></pre>
-                  );
-                }
+                  if (className) {
+                    return (
+                      <pre><code className={className} {...props}>
+                        {children}
+                      </code></pre>
+                    );
+                  }
 
-                return <code {...props}>{children}</code>;
-              },
-            }}
-          >
-            {entry.content}
-          </ReactMarkdown>
+                  return <code {...props}>{children}</code>;
+                },
+              }}
+            >
+              {visibleContent}
+            </ReactMarkdown>
+          )}
         </div>
       </div>
       {actionButtons}
     </div>
   );
-}
+});

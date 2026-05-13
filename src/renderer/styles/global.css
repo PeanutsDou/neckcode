@@ -782,11 +782,32 @@ html, body {
 
 .chat-messages {
   flex: 1;
-  overflow-y: auto;
-  padding: 16px 20px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.chat-messages-virtuoso {
+  height: 100%;
+  width: 100%;
+}
+
+.virtual-message-row {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  box-sizing: border-box;
+  padding: 6px 20px;
+}
+
+.virtual-message-footer {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 6px 20px 0;
+}
+
+.virtual-message-list-pad {
+  height: 10px;
 }
 
 .chat-empty {
@@ -1000,6 +1021,42 @@ html, body {
 .message-content th {
   background: var(--bg-surface);
   font-weight: 500;
+}
+
+.message-text-preview {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message-expand-btn,
+.tool-card-expand-btn {
+  align-self: flex-start;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  margin-top: 6px;
+  padding: 3px 8px;
+}
+
+.message-expand-btn:hover,
+.tool-card-expand-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .message-attachments {
@@ -2952,6 +3009,10 @@ html, body {
   max-height: 200px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
+}
+
+.tool-card-result-preview {
+  max-height: 260px;
 }
 
 /* ===== Scrollbar ===== */

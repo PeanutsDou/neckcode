@@ -27,6 +27,10 @@ const TOOL_META: Record<string, { icon: string; label: string; color: string }> 
   invoke_skill: { icon: '*', label: 'Skill', color: '#a6adc8' },
 };
 
+const LARGE_TOOL_RESULT_THRESHOLD = 30_000;
+const LARGE_TOOL_RESULT_HEAD = 16_000;
+const LARGE_TOOL_RESULT_TAIL = 4_000;
+
 function formatArgs(args: string | undefined, maxLen = 120): string {
   if (!args) return '';
   try {
@@ -40,9 +44,26 @@ function formatArgs(args: string | undefined, maxLen = 120): string {
   }
 }
 
+function makeResultPreview(result: string): string {
+  if (result.length <= LARGE_TOOL_RESULT_THRESHOLD) return result;
+  const hidden = result.length - LARGE_TOOL_RESULT_HEAD - LARGE_TOOL_RESULT_TAIL;
+  return [
+    result.slice(0, LARGE_TOOL_RESULT_HEAD),
+    '',
+    `... 已折叠 ${hidden.toLocaleString()} 个字符 ...`,
+    '',
+    result.slice(-LARGE_TOOL_RESULT_TAIL),
+  ].join('\n');
+}
+
 export function ToolCallCard({ toolName, toolArgs, toolResult }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [showFullResult, setShowFullResult] = useState(false);
   const meta = TOOL_META[toolName] || { icon: '-', label: toolName, color: '#6c7086' };
+  const hasLargeResult = Boolean(toolResult && toolResult.length > LARGE_TOOL_RESULT_THRESHOLD);
+  const visibleResult = toolResult && hasLargeResult && !showFullResult
+    ? makeResultPreview(toolResult)
+    : toolResult;
 
   return (
     <div className="tool-card">
@@ -54,8 +75,17 @@ export function ToolCallCard({ toolName, toolArgs, toolResult }: Props) {
         )}
         <span className="tool-card-toggle">{expanded ? '-' : '+'}</span>
       </div>
-      {expanded && toolResult && (
-        <pre className="tool-card-result">{toolResult}</pre>
+      {expanded && visibleResult && (
+        <>
+          <pre className={`tool-card-result ${hasLargeResult && !showFullResult ? 'tool-card-result-preview' : ''}`}>
+            {visibleResult}
+          </pre>
+          {hasLargeResult && !showFullResult && (
+            <button className="tool-card-expand-btn" onClick={() => setShowFullResult(true)}>
+              显示完整结果
+            </button>
+          )}
+        </>
       )}
     </div>
   );
