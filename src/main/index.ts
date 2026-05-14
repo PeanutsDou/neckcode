@@ -7,6 +7,8 @@ import { createAnthropicProvider } from './providers/anthropic';
 import { createToolRegistry } from './tools/registry';
 import { loadConfig, saveConfig, getConfig, getActiveProvider, getModelConfig, inferModelMode } from './config';
 import { loadSkills } from './skills/loader';
+import { createInvokeAgentHandler } from './tools/agent-tools';
+import { getAgents } from './config';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import type { ConfirmRequest } from '../shared/types';
@@ -126,6 +128,10 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
   if (!registry) {
     const { BrowserWindow } = require('electron');
     const { getPermissionMode, pendingConfirms } = require('./ipc-handlers');
+    const invokeAgent = createInvokeAgentHandler(
+      () => getAgents(),
+      createProvider,
+    );
     registry = createToolRegistry(
       getConfig().agent.workspaceRoot,
       async (request: ConfirmRequest) => {
@@ -159,6 +165,7 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
         });
       },
       () => getPermissionMode(),
+      invokeAgent,
     );
     toolRegistries.set(sessionId, registry);
   }

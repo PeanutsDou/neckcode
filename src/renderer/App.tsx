@@ -9,6 +9,7 @@ import { ContextBar } from './components/ContextBar';
 import { AskDialog } from './components/AskDialog';
 import { SkillsDialog } from './components/SkillsDialog';
 import { MemoryDialog } from './components/MemoryDialog';
+import { AgentDialog } from './components/AgentDialog';
 import { WorkspaceBar } from './components/WorkspaceBar';
 import { ImageViewer } from './components/ImageViewer';
 import { CloseDialog } from './components/CloseDialog';
@@ -56,6 +57,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [version, setVersion] = useState('');
@@ -163,6 +165,9 @@ export default function App() {
           </div>
           <div className="toolbar-center" />
           <div className="toolbar-right">
+            <button className="toolbar-btn" onClick={() => setAgentOpen(true)}>
+              Agent
+            </button>
             <button className="toolbar-btn" onClick={() => setSkillsOpen(true)}>
               技能
             </button>
@@ -274,6 +279,7 @@ export default function App() {
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <SkillsDialog open={skillsOpen} onClose={() => setSkillsOpen(false)} />
         <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+        <AgentDialog open={agentOpen} onClose={() => setAgentOpen(false)} />
         <ImageViewer open={!!viewerSrc} src={viewerSrc || ''} onClose={() => setViewerSrc(null)} />
         <CloseDialog />
         <AskDialog />

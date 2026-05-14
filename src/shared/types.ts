@@ -53,6 +53,18 @@ export interface ProviderConfig {
   models: string[];
 }
 
+// --- Agent Panel ---
+
+export interface AgentConfig {
+  id: string;
+  name: string;
+  memory: string;
+  skills: string[];
+  model: string;
+}
+
+// ---
+
 export interface ToolDefinition {
   type: 'function';
   function: {

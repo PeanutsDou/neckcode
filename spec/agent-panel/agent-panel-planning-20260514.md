@@ -1,8 +1,8 @@
 # Agent 固定化配置面板
 
-> 文档状态：**规划中**
+> 文档状态：**执行中**
 > 创建日期：2026-05-14
-> 最后更新：2026-05-14
+> 最后更新：2026-05-16
 
 ---
 
@@ -74,12 +74,12 @@
 
 | # | 模块 | 作用 | 依赖 | 状态 |
 |---|------|------|------|------|
-| 1 | 数据模型 + 持久化 | config.json 新增 agents 数组，config.ts 读写 | — | ☐ 未开始 |
-| 2 | Agent 管理 UI | 工具栏入口 + AgentDialog（列表 + 详情编辑） | 1 | ☐ 未开始 |
-| 3 | IPC 通道 | agents:list / agents:save / agents:delete | 1 | ☐ 未开始 |
-| 4 | invoke_agent 工具 | 主 Agent 调用子 Agent 的工具定义 + 执行 | 1,3 | ☐ 未开始 |
-| 5 | 子 Agent Runtime | 独立 AgentRuntime 实例化，注入记忆/技能/模型/任务 | 1,4 | ☐ 未开始 |
-| 6 | 并行调用支持 | 多个 invoke_agent 在同一批次并发执行 | 5 | ☐ 未开始 |
+| 1 | 数据模型 + 持久化 | config.json 新增 agents 数组，config.ts 读写 | — | ✅ 已完成 |
+| 2 | Agent 管理 UI | 工具栏入口 + AgentDialog（列表 + 详情编辑） | 1 | ✅ 已完成 |
+| 3 | IPC 通道 | agents:list / agents:save / agents:delete | 1 | ✅ 已完成 |
+| 4 | invoke_agent 工具 | 主 Agent 调用子 Agent 的工具定义 + 执行 | 1,3 | ✅ 已完成 |
+| 5 | 子 Agent Runtime | 独立 AgentRuntime 实例化，注入记忆/技能/模型/任务 | 1,4 | ✅ 已完成 |
+| 6 | 并行调用支持 | 多个 invoke_agent 在同一批次并发执行 | 5 | ✅ 已完成 |
 
 ---
 

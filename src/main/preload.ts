@@ -114,6 +114,12 @@ const api = {
   invokeSkill: (name: string) => ipcRenderer.invoke('skills:invoke', name),
   writeSkillContent: (name: string, content: string) => ipcRenderer.invoke('skills:write-content', name, content),
   deleteSkill: (name: string) => ipcRenderer.invoke('skills:delete', name),
+
+  // Agents
+  listAgents: () => ipcRenderer.invoke('agents:list'),
+  saveAgent: (agent: unknown) => ipcRenderer.invoke('agents:save', agent),
+  deleteAgent: (agentId: string) => ipcRenderer.invoke('agents:delete', agentId),
+
   getAgentMd: () => ipcRenderer.invoke('agent-md:get'),
   listMemory: () => ipcRenderer.invoke('memory:list'),
   readMemory: (path: string) => ipcRenderer.invoke('memory:read', path),

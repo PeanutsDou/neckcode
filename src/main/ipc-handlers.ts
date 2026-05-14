@@ -7,11 +7,11 @@ import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import type { Attachment, ContextStatus, Message, QueuedUserMessage } from './agent/types';
 import { BLOCKING_BUFFER_TOKENS, MAX_RESERVED_OUTPUT_TOKENS, getAutoCompactThreshold } from './agent/context-manager';
-import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig, inferModelMode } from './config';
+import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig, inferModelMode, getAgents, saveAgent, deleteAgent } from './config';
 import { VisionInterpreter } from './agent/vision-interpreter';
 import type { AppConfigData, ProviderConfig } from './config';
 import type { PermissionMode } from '../shared/permissions';
-import type { AgentError, AgentErrorCode, ProviderTestCheck, ProviderTestConfig, ProviderTestResult, RunStatusEvent } from '../shared/types';
+import type { AgentConfig, AgentError, AgentErrorCode, ProviderTestCheck, ProviderTestConfig, ProviderTestResult, RunStatusEvent } from '../shared/types';
 import { discoverAgentMd } from './agent-md';
 import { getLoadedSkills, loadSkills } from './skills/loader';
 import {
@@ -946,6 +946,21 @@ export function setupIpcHandlers(
     if (cfg.activeProvider === id) {
       cfg.activeProvider = cfg.providers[0]?.id || 'deepseek';
     }
+    await saveConfig();
+  });
+
+  // ---- Agents ----
+  ipcMain.handle('agents:list', () => {
+    return getAgents();
+  });
+
+  ipcMain.handle('agents:save', async (_event, agent: AgentConfig) => {
+    saveAgent(agent);
+    await saveConfig();
+  });
+
+  ipcMain.handle('agents:delete', async (_event, agentId: string) => {
+    deleteAgent(agentId);
     await saveConfig();
   });
 

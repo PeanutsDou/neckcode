@@ -375,6 +375,22 @@ const DEFINITIONS: ToolDefinition[] = [
     },
     readOnly: true,
   },
+  {
+    type: 'function',
+    function: {
+      name: 'invoke_agent',
+      description: '调用已配置的专属 Agent 执行任务。可同时并行调用多个 Agent。每个子 Agent 拥有独立上下文。',
+      parameters: {
+        type: 'object',
+        properties: {
+          agent: { type: 'string', description: '要调用的 Agent 名称或 ID。' },
+          task: { type: 'string', description: '任务描述，将作为子 Agent 的初始用户消息注入到独立上下文中。' },
+        },
+        required: ['agent', 'task'],
+      },
+    },
+    readOnly: true,
+  },
 ];
 
 import type { PermissionMode } from '../../shared/permissions';
@@ -386,6 +402,7 @@ export function createToolRegistry(
   confirmHandler?: (request: ConfirmRequest) => Promise<boolean>,
   askHandler?: (questions: Array<{ question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }>) => Promise<Record<string, string>>,
   getPermissionMode?: () => PermissionMode,
+  invokeAgent?: (args: Record<string, unknown>) => Promise<string>,
 ): ToolRegistry {
   const needsConfirm = (toolName: string, args: Record<string, unknown>): boolean => {
     const mode = getPermissionMode?.() || 'default';
@@ -704,6 +721,11 @@ export function createToolRegistry(
 
     async invoke_skill(args) {
       return skillHandlers.invoke_skill(args);
+    },
+
+    async invoke_agent(args) {
+      if (!invokeAgent) return 'ERROR: invoke_agent is not available.';
+      return await invokeAgent(args);
     },
 
     async ask_user_question(args) {

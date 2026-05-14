@@ -3,6 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { encrypt, decrypt } from './config/secrets';
 import type { PermissionMode } from '../shared/permissions';
+import type { AgentConfig } from '../shared/types';
 
 export type ModelMode = 'text' | 'multimodal';
 
@@ -49,6 +50,7 @@ export interface AppConfigData {
     width?: number;
     height?: number;
   };
+  agents: AgentConfig[];
 }
 
 const CONFIG_DIR = join(homedir(), '.deepseekcode');
@@ -96,12 +98,22 @@ const defaultConfig: AppConfigData = {
   permissionMode: 'default',
   theme: 'light',
   lightScheme: 'default',
+  agents: [],
 };
 
 let config: AppConfigData = { ...defaultConfig };
 
 function normalizePermissionMode(value: unknown): PermissionMode {
   return value === 'fullAccess' ? 'fullAccess' : 'default';
+}
+
+function normalizeAgents(raw: unknown): AgentConfig[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((a: unknown): a is AgentConfig =>
+    typeof a === 'object' && a !== null &&
+    typeof (a as Record<string,unknown>).id === 'string' &&
+    typeof (a as Record<string,unknown>).name === 'string'
+  );
 }
 
 export function inferModelMode(modelName: string): ModelMode {
@@ -178,6 +190,23 @@ export function getActiveProvider(): ProviderConfig {
   return config.providers.find(p => p.id === config.activeProvider) || config.providers[0];
 }
 
+export function getAgents(): AgentConfig[] {
+  return config.agents;
+}
+
+export function saveAgent(agent: AgentConfig): void {
+  const idx = config.agents.findIndex(a => a.id === agent.id);
+  if (idx >= 0) {
+    config.agents[idx] = agent;
+  } else {
+    config.agents.push(agent);
+  }
+}
+
+export function deleteAgent(agentId: string): void {
+  config.agents = config.agents.filter(a => a.id !== agentId);
+}
+
 function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
   if (Array.isArray(raw.providers)) {
     const providers = (raw.providers as Array<Record<string, unknown>>).map(p => ({
@@ -230,6 +259,7 @@ export async function loadConfig(): Promise<AppConfigData> {
     const raw = JSON.parse(data) as Record<string, unknown>;
     config = migrateLegacy(raw);
     config.permissionMode = normalizePermissionMode(config.permissionMode);
+    config.agents = normalizeAgents(config.agents);
     for (const p of config.providers) {
       if (p.apiKey) p.apiKey = await decrypt(p.apiKey);
     }
