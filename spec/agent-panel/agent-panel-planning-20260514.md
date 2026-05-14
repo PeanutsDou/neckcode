@@ -8,7 +8,7 @@
 
 ## 一、需求概述
 
-在主界面顶部菜单栏新增「Agent」入口，用户可配置多个专属 Agent。每个专属 Agent 拥有独立的记忆（单输入框）、技能（从已有库勾选）和模型配置（从已有模型选），可在对话中切换调用，也可被主 Agent 作为子 Agent 调用。
+在顶部菜单栏新增「Agent」入口，用户可配置多个专属 Agent。**调用方式以主 Agent 为主**，主 Agent 根据任务需求并行调用子 Agent，子 Agent 独立上下文运行并返回结果。**不提供用户手动切换 Agent 的 UI 入口。**
 
 ---
 
@@ -29,27 +29,28 @@
 - 显示所有已配置的 Agent
 - 新建 Agent（默认名称，可重命名）
 - 删除 Agent（确认弹窗）
+- **无数量上限**
+- **不需要启用/禁用开关**
 
 #### 2.2.2 Agent 细节配置（选中后展示）
 
 | 配置项 | 说明 | UI 形式 |
 |--------|------|---------|
 | 名称 | Agent 显示名称 | 文本输入框 |
-| 记忆 | Agent 专属系统提示/记忆 | 单行或小多行文本输入框（不需要多文档） |
+| 记忆 | Agent 专属系统提示/记忆，**支持长文本** | 多行文本输入框（类似 AGENT.md 编辑区） |
 | 技能 | 从已有技能库中选择加载 | 多选列表（展示所有已加载 skill，勾选启用） |
 | 模型 | 使用的模型 | 下拉选择（来自已有 Provider 模型配置） |
 
-### 2.3 主界面 Agent 切换
+### 2.3 主 Agent 调用子 Agent
 
-- **位置**：输入框右下角，「完全访问 / 默认权限」枚举**后面**
-- **形式**：下拉选择器
-- **选项**：「默认 Agent」+ 用户配置的所有专属 Agent
-- **行为**：选择后，后续对话使用该 Agent 的配置（记忆 + 技能 + 模型）
+- 新增工具 `invoke_agent`，主 Agent 在对话中调用用户配置的专属 Agent
+- **支持并行调用**：主 Agent 可同时发起多个 `invoke_agent`，子 Agent 并发执行
+- **独立上下文**：每个子 Agent 拥有独立上下文窗口，不污染主 Agent
+- **任务注入**：主 Agent 调用时传入任务描述，作为子 Agent 的初始用户消息（注入到独立上下文中）
 
-### 2.4 主 Agent 调用子 Agent
+### 2.4 不需要的功能（已取消）
 
-- 新增工具 `invoke_agent`，主 Agent 可在对话中调用用户配置的专属 Agent
-- 调用时传入 prompt，子 Agent 使用自己的配置（记忆/技能/模型）处理后返回结果
+- ~~输入框右下角 Agent 枚举下拉~~ — 取消，由主 Agent 统一调度
 
 ---
 
@@ -78,15 +79,29 @@
 
 | 组件 | 说明 |
 |------|------|
-| `AgentDialog.tsx` | Agent 管理面板主组件 |
-| `AgentSelector.tsx` | 输入框旁的 Agent 下拉选择器 |
+| `AgentDialog.tsx` | Agent 管理面板主组件（列表 + 详情） |
 
 ### 3.3 Agent 运行时
 
-- 复用现有 `AgentRuntime`，每个 Agent 实例化时加载各自的 systemPrompt（记忆）+ skills + model
-- 主 Agent 通过 `invoke_agent` 工具调用子 Agent，子 Agent 独立运行一个 turn 后返回结果
+- 每个子 Agent 实例化独立的 `AgentRuntime`，加载各自的 systemPrompt（记忆）+ skills + model
+- 主 Agent 调用时，将任务描述作为子 Agent 的初始 user message 注入
+- 子 Agent 独立运行 turn，完成后返回结果给主 Agent
+- **并行调用**：多个 `invoke_agent` 工具调用可在同一批次中并发执行
 
-### 3.4 IPC 通道
+### 3.4 invoke_agent 工具定义
+
+```json
+{
+  "name": "invoke_agent",
+  "description": "调用一个已配置的专属 Agent 执行任务。可并行调用多个 Agent。",
+  "parameters": {
+    "agent": "Agent 名称或 ID",
+    "task": "任务描述，将作为子 Agent 的用户消息"
+  }
+}
+```
+
+### 3.5 IPC 通道
 
 | 通道 | 方向 | 说明 |
 |------|------|------|
@@ -101,18 +116,18 @@
 | 模块 | 影响 |
 |------|------|
 | `App.tsx` | 菜单栏新增 Agent 按钮 |
-| `ChatInput.tsx` | 新增 Agent 下拉选择器 |
-| `SettingsDialog.tsx` 或独立 Dialog | Agent 管理面板 |
 | `config.ts` | 新增 agents 配置项 |
 | `ipc-handlers.ts` | 新增 agents CRUD IPC |
 | `registry.ts` | 新增 invoke_agent 工具 |
-| `agent/runtime.ts` | 支持子 Agent 调用 |
+| `agent/runtime.ts` | 支持子 Agent 实例化与并行调用 |
 
 ---
 
-## 五、待确认项
+## 五、已确认项
 
-- [ ] Agent 记忆是否需要支持长文本，还是限制长度？
-- [ ] 子 Agent 调用是否需要独立的上下文窗口（不污染主 Agent 上下文）？
-- [ ] Agent 列表是否有数量上限？
-- [ ] 是否需要 Agent 的启用/禁用开关？
+- [x] Agent 记忆支持长文本
+- [x] 子 Agent 独立上下文，主 Agent 注入任务消息作为初始上下文
+- [x] Agent 列表无数量上限
+- [x] 不需要启用/禁用开关
+- [x] 取消手动切换 Agent 的 UI 入口，由主 Agent 统一调用
+- [x] 支持大量并行调用
