@@ -4,6 +4,7 @@ release/
 .env
 *.db
 skills/
+!skills/self-dev/
 .deepseekcode/
 # Compiled TS artifacts in src/
 src/**/*.js
