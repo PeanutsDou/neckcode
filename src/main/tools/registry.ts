@@ -3,13 +3,15 @@ import { dirname, resolve, join, relative, extname, isAbsolute } from 'path';
 import { exec as execCb, execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import type { ToolDefinition, ToolCall } from '../agent/types';
-import type { ToolRegistry } from '../agent/runtime';
+import type { ToolRegistry, ToolRunContext } from '../agent/runtime';
 import type { ConfirmRequest, RiskLevel } from '../../shared/types';
 import { webFetch } from './web-fetch';
 import { webSearch } from './web-search';
 import { taskHandlers } from './task-tools';
 import { notebookEdit } from './notebook-edit';
 import { skillHandlers } from './skill-tools';
+import { getAgents } from '../config';
+import type { AgentConfig } from '../../shared/types';
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -397,13 +399,60 @@ import type { PermissionMode } from '../../shared/permissions';
 
 const CONFIRM_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'notebook_edit']);
 
+function buildInvokeAgentDefinition(definition: ToolDefinition, agents: AgentConfig[]): ToolDefinition {
+  const parameterSchema = definition.function.parameters as {
+    type: string;
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  const choices = Array.from(new Set(
+    agents.flatMap(agent => [agent.name.trim(), agent.id.trim()]).filter(Boolean)
+  ));
+  const summary = agents
+    .map(agent => {
+      const title = agent.name.trim() || agent.id;
+      const skills = agent.skills.length > 0 ? `; skills: ${agent.skills.join(', ')}` : '';
+      return `${title} [id: ${agent.id}; model: ${agent.model}${skills}]`;
+    })
+    .join(' | ');
+
+  return {
+    ...definition,
+    function: {
+      ...definition.function,
+      description: summary
+        ? `Delegate work to a configured specialist agent when it is a better fit or when an isolated subtask should be handed off. Current user-turn image attachments are forwarded automatically to the sub-agent. Available agents: ${summary}`
+        : definition.function.description,
+      parameters: {
+        ...parameterSchema,
+        properties: {
+          ...(parameterSchema.properties || {}),
+          agent: {
+            ...((parameterSchema.properties?.agent as Record<string, unknown> | undefined) || {}),
+            ...(choices.length > 0 ? { enum: choices } : {}),
+            description: choices.length > 0
+              ? `Agent name or ID. Available values: ${choices.join(', ')}.`
+              : 'Agent name or ID.',
+          },
+          task: {
+            ...((parameterSchema.properties?.task as Record<string, unknown> | undefined) || {}),
+            description: 'Self-contained task for the sub-agent. Current user-turn image attachments are forwarded automatically when present.',
+          },
+        },
+      },
+    },
+    readOnly: false,
+  };
+}
+
 export function createToolRegistry(
   workspaceRoot: string,
   confirmHandler?: (request: ConfirmRequest) => Promise<boolean>,
   askHandler?: (questions: Array<{ question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }>) => Promise<Record<string, string>>,
   getPermissionMode?: () => PermissionMode,
-  invokeAgent?: (args: Record<string, unknown>) => Promise<string>,
+  invokeAgent?: (args: Record<string, unknown>, context?: ToolRunContext | null) => Promise<string>,
 ): ToolRegistry {
+  let currentRunContext: ToolRunContext | null = null;
   const needsConfirm = (toolName: string, args: Record<string, unknown>): boolean => {
     const mode = getPermissionMode?.() || 'default';
     void args;
@@ -725,7 +774,7 @@ export function createToolRegistry(
 
     async invoke_agent(args) {
       if (!invokeAgent) return 'ERROR: invoke_agent is not available.';
-      return await invokeAgent(args);
+      return await invokeAgent(args, currentRunContext);
     },
 
     async ask_user_question(args) {
@@ -757,7 +806,18 @@ export function createToolRegistry(
 
   return {
     getDefinitions() {
-      return DEFINITIONS;
+      const agents = getAgents().filter(agent => (agent.name.trim() || agent.id.trim()) && agent.model.trim());
+      return DEFINITIONS
+        .filter(def => {
+          if (def.function.name === 'ask_user_question' && !askHandler) return false;
+          if (def.function.name === 'invoke_agent' && (!invokeAgent || agents.length === 0)) return false;
+          return true;
+        })
+        .map(def => def.function.name === 'invoke_agent' ? buildInvokeAgentDefinition(def, agents) : def);
+    },
+
+    setRunContext(context) {
+      currentRunContext = context;
     },
 
     async execute(toolCall: ToolCall): Promise<string> {

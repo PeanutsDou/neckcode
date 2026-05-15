@@ -26,11 +26,6 @@ export interface AppConfigData {
   providers: ProviderConfig[];
   activeProvider: string;
   activeModel: string;
-  vision?: {
-    parserModel?: string;
-    visibility?: 'collapsed';
-    pipeline?: 'adaptive';
-  };
   agent: {
     maxTurns: number;
     maxTokens: number;       // fallback max output tokens
@@ -83,11 +78,6 @@ const defaultConfig: AppConfigData = {
   providers: DEFAULT_PROVIDERS,
   activeProvider: 'deepseek',
   activeModel: 'deepseek-v4-pro',
-  vision: {
-    parserModel: '',
-    visibility: 'collapsed',
-    pipeline: 'adaptive',
-  },
   agent: {
     maxTurns: 100,
     maxTokens: 32768,
@@ -160,6 +150,12 @@ function normalizeModels(raw: unknown): ModelConfig[] {
     .filter((m): m is ModelConfig => m !== null);
 }
 
+function stripRemovedConfigKeys(raw: Record<string, unknown>): Record<string, unknown> {
+  const cleaned = { ...raw };
+  delete cleaned.vision;
+  return cleaned;
+}
+
 export function getConfig(): AppConfigData {
   return config;
 }
@@ -208,6 +204,7 @@ export function deleteAgent(agentId: string): void {
 }
 
 function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
+  const cleanedRaw = stripRemovedConfigKeys(raw);
   if (Array.isArray(raw.providers)) {
     const providers = (raw.providers as Array<Record<string, unknown>>).map(p => ({
       id: p.id as string,
@@ -218,9 +215,9 @@ function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
     }));
     return {
       ...defaultConfig,
-      ...raw,
+      ...cleanedRaw,
       providers,
-      agent: { ...defaultConfig.agent, ...(raw.agent as Record<string, unknown> || {}) },
+      agent: { ...defaultConfig.agent, ...(cleanedRaw.agent as Record<string, unknown> || {}) },
     } as AppConfigData;
   }
 
@@ -243,10 +240,10 @@ function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
 
   return {
     ...defaultConfig,
-    ...raw,
+    ...cleanedRaw,
     providers,
-    activeModel: (raw.activeModel as string) || defaultConfig.activeModel,
-    agent: { ...defaultConfig.agent, ...(raw.agent as Record<string, unknown> || {}) },
+    activeModel: (cleanedRaw.activeModel as string) || defaultConfig.activeModel,
+    agent: { ...defaultConfig.agent, ...(cleanedRaw.agent as Record<string, unknown> || {}) },
     deepseek: undefined,
     anthropic: undefined,
   } as unknown as AppConfigData;
@@ -263,9 +260,14 @@ export async function loadConfig(): Promise<AppConfigData> {
     for (const p of config.providers) {
       if (p.apiKey) p.apiKey = await decrypt(p.apiKey);
     }
-  } catch {
+  } catch (err) {
     config = { ...defaultConfig };
-    await saveConfig();
+    const error = err as NodeJS.ErrnoException | undefined;
+    if (error?.code === 'ENOENT') {
+      await saveConfig();
+    } else {
+      console.error('Failed to load config, using in-memory defaults without overwriting disk config:', err);
+    }
   }
   return config;
 }

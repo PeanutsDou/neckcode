@@ -6,7 +6,7 @@ export interface ChatEntry {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
-  attachments?: { type: string; data: string; name: string; size: number }[];
+  attachments?: { type: string; data: string; mimeType: string; name: string; size: number }[];
   toolName?: string;
   toolArgs?: string;
   toolResult?: string;
@@ -119,7 +119,7 @@ function createSessionId(): string {
 export function getSessionStatus(session?: SessionState): SessionStatus {
   if (!session) return 'idle';
   if (session.runState.phase === 'error') return 'error';
-  if (['starting', 'requesting_model', 'analyzing_image', 'thinking', 'streaming', 'tool_running', 'waiting_user', 'finishing'].includes(session.runState.phase)) return 'running';
+  if (['starting', 'requesting_model', 'thinking', 'streaming', 'tool_running', 'waiting_user', 'finishing'].includes(session.runState.phase)) return 'running';
   if (session.error) return 'error';
   if (session.isStreaming) return 'running';
   return 'idle';
@@ -300,7 +300,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const startedAt = status.startedAt !== undefined
         ? status.startedAt
         : ses.runState.startedAt || (status.phase === 'starting' ? Date.now() : null);
-      const running = ['starting', 'requesting_model', 'analyzing_image', 'thinking', 'streaming', 'tool_running', 'waiting_user', 'finishing'].includes(status.phase);
+      const running = ['starting', 'requesting_model', 'thinking', 'streaming', 'tool_running', 'waiting_user', 'finishing'].includes(status.phase);
       return {
         ...ses,
         isStreaming: running,

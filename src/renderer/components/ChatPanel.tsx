@@ -14,6 +14,7 @@ import { VirtualizedEntryList } from './VirtualizedEntryList';
 import { useIpcListeners } from '../hooks/useIpcListeners';
 import { useStreamTimer } from '../hooks/useStreamTimer';
 import { useStreamMetric } from '../hooks/useStreamTokens';
+import { inferImageMimeType } from '../utils/attachments';
 
 export function ChatPanel() {
   const store = useChatStore;
@@ -40,7 +41,7 @@ export function ChatPanel() {
     const attachments = lastUser.attachments?.map(a => ({
       type: a.type,
       data: a.data,
-      mimeType: a.type === 'image' ? 'image/png' : 'text/plain',
+      mimeType: a.mimeType || (a.type === 'image' ? inferImageMimeType(a.data) : 'text/plain'),
     }));
     state.setErrorTo(sid, null);
     state.setStreamingTo(sid, true);

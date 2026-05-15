@@ -3,6 +3,7 @@ import { useChatStore, getSessionId, useActiveIsStreaming, useActivePendingConte
 import { useAppStore } from '../stores/app-store';
 import { CustomSelect } from './CustomSelect';
 import { PermissionToggle } from './PermissionToggle';
+import { inferImageMimeType } from '../utils/attachments';
 
 interface SlashCommand {
   name: string;
@@ -12,6 +13,7 @@ interface SlashCommand {
 
 interface ImageAttachment {
   data: string;
+  mimeType: string;
   name: string;
   size: number;
 }
@@ -140,7 +142,12 @@ export function ChatInput() {
         const blob = item.getAsFile();
         if (!blob) continue;
         const reader = new FileReader();
-        reader.onload = () => setImages(prev => [...prev, { data: reader.result as string, name: `paste-${Date.now()}.png`, size: blob.size }]);
+        reader.onload = () => setImages(prev => [...prev, {
+          data: reader.result as string,
+          mimeType: blob.type || inferImageMimeType(reader.result as string),
+          name: `paste-${Date.now()}.png`,
+          size: blob.size,
+        }]);
         reader.readAsDataURL(blob);
       }
     }
@@ -171,7 +178,12 @@ export function ChatInput() {
     for (const file of e.dataTransfer.files) {
       if (file.type.startsWith('image/')) {
         const reader = new FileReader();
-        reader.onload = () => setImages(prev => [...prev, { data: reader.result as string, name: file.name, size: file.size }]);
+        reader.onload = () => setImages(prev => [...prev, {
+          data: reader.result as string,
+          mimeType: file.type || inferImageMimeType(reader.result as string),
+          name: file.name,
+          size: file.size,
+        }]);
         reader.readAsDataURL(file);
       } else {
         const reader = new FileReader();
@@ -224,11 +236,11 @@ export function ChatInput() {
       sid,
       message,
       modelId,
-      uiAttachments: images.map(img => ({ type: 'image' as const, data: img.data, mimeType: 'image/png', name: img.name, size: img.size })),
+      uiAttachments: images.map(img => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType, name: img.name, size: img.size })),
       apiAttachments: images.map(img => ({
         type: 'image' as const,
         data: img.data,
-        mimeType: img.data.startsWith('data:image/png') ? 'image/png' : img.data.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
+        mimeType: img.mimeType,
       })),
     };
     const shouldQueue = useChatStore.getState().sessions[sid]?.isStreaming;

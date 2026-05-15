@@ -60,6 +60,7 @@ function parseUsage(raw: unknown): ProviderUsage | undefined {
 
 export function createOpenAIProvider(config: OpenAIConfig): Provider {
   const supportsVision = config.supportsVision === true;
+  const wantsStreaming = config.stream !== false;
 
   // Normalize base URL: strip trailing /chat/completions etc. if user accidentally pasted the full endpoint
   const baseUrl = config.baseUrl.replace(/\/(chat\/completions|completions|v1)\/?$/, '');
@@ -108,8 +109,8 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           messages: apiMessages,
           tools: tools.length > 0 ? tools : undefined,
           tool_choice: tools.length > 0 ? 'auto' : undefined,
-          stream: config.stream !== false,
-          stream_options: config.stream !== false ? { include_usage: true } : undefined,
+          stream: wantsStreaming,
+          stream_options: wantsStreaming ? { include_usage: true } : undefined,
           temperature: config.temperature ?? 0,
           max_tokens: config.maxTokens ?? 16384,
         }),
@@ -124,8 +125,9 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
       const toolCallsByIndex = new Map<number, ToolCall>();
       let text = '';
       let reasoningContent = '';
+      const responseContentType = response.headers.get('content-type') || '';
 
-      if (!response.body) {
+      if (!wantsStreaming || responseContentType.includes('application/json')) {
         const json = (await response.json()) as Record<string, unknown>;
         const message = (json?.choices as Array<Record<string, unknown>>)?.[0]?.message as Record<string, unknown> ?? {};
         const usage = parseUsage(json.usage);
@@ -149,6 +151,10 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           toolCalls: [...toolCallsByIndex.values()].filter(tc => tc.name),
           usage,
         };
+      }
+
+      if (!response.body) {
+        throw new Error('Streaming response body is unavailable.');
       }
 
       // Streaming

@@ -45,8 +45,6 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [balance, setBalance] = useState<BalanceInfo | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
-  const [visionParserModel, setVisionParserModel] = useState('');
-  const [multimodalModels, setMultimodalModels] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -58,18 +56,7 @@ export function SettingsDialog({ open, onClose }: Props) {
       const cfg = await window.electronAPI.getConfig() as any;
       const list = cfg.providers || [];
       setProviderList(list.map((p: any) => ({ id: p.id, name: p.name, models: Array.isArray(p.models) ? p.models.map((m: any) => typeof m === 'string' ? m : m.name) : [] })));
-      const multimodal = list.flatMap((p: any) => (p.models || [])
-        .filter((m: any) => typeof m === 'object' && m.mode === 'multimodal')
-        .map((m: any) => m.name));
-      setMultimodalModels(multimodal);
-      setVisionParserModel(cfg.vision?.parserModel || '');
     } catch { /* */ }
-  };
-
-  const saveVisionParserModel = async (model: string) => {
-    setVisionParserModel(model);
-    await window.electronAPI.setConfig('visionParserModel', model);
-    window.dispatchEvent(new CustomEvent('providers-changed'));
   };
 
   const inferModelMode = (name: string): 'text' | 'multimodal' => {
@@ -287,14 +274,6 @@ export function SettingsDialog({ open, onClose }: Props) {
           {/* Left: providers list */}
           <div className="settings-left">
             <div className="settings-form">
-              <label className="settings-label">图片解析模型
-                <select className="settings-input" value={visionParserModel} onChange={e => saveVisionParserModel(e.target.value)}>
-                  <option value="">未配置</option>
-                  {multimodalModels.map(model => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
-              </label>
               <div className="provider-list">
                 {providerList.map(p => (
                   <div key={p.id} className={`provider-item ${editingId === p.id ? 'selected' : ''}`} onClick={() => startEdit(p.id)}>

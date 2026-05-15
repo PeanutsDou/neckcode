@@ -7,6 +7,7 @@ import { useChatStore } from '../stores/chat-store';
 import { DiffPreview } from './DiffPreview';
 import { MermaidBlock } from './MermaidBlock';
 import { ToolCallCard } from './ToolCallCard';
+import { inferImageMimeType } from '../utils/attachments';
 
 interface Props {
   entry: ChatEntry;
@@ -57,7 +58,7 @@ export const MessageBubble = memo(function MessageBubble({ entry }: Props) {
         userAttachments = allEntries[i].attachments?.map(a => ({
           type: a.type,
           data: a.data,
-          mimeType: a.type === 'image' ? 'image/png' : 'text/plain',
+          mimeType: a.mimeType || (a.type === 'image' ? inferImageMimeType(a.data) : 'text/plain'),
         }));
         break;
       }

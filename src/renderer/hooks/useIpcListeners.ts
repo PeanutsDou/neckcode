@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useChatStore } from '../stores/chat-store';
+import { inferImageMimeType } from '../utils/attachments';
 
 export function useIpcListeners() {
   const store = useChatStore;
@@ -27,6 +28,7 @@ export function useIpcListeners() {
         ? data.attachments.map((att: any, i: number) => ({
           type: att.type || 'image',
           data: att.data,
+          mimeType: att.mimeType || inferImageMimeType(att.data || ''),
           name: att.name || `queued-${i + 1}.png`,
           size: att.size || 0,
         }))

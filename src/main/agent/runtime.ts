@@ -1,7 +1,6 @@
 import { ChatSession } from './session';
 import type { ToolCall, ToolDefinition, RunStepResult, AgentCallbacks, Message, Attachment, ContextStatus } from './types';
 import { ContextManager, type ContextManagerConfig } from './context-manager';
-import type { VisionInterpreter } from './vision-interpreter';
 
 function partitionToolCalls(toolCalls: ToolCall[], toolDefs: ToolDefinition[]): { concurrent: boolean; calls: ToolCall[] }[] {
   const batches: { concurrent: boolean; calls: ToolCall[] }[] = [];
@@ -29,9 +28,15 @@ export interface Provider {
   }): Promise<RunStepResult>;
 }
 
+export interface ToolRunContext {
+  userMessage: string;
+  attachments: Attachment[];
+}
+
 export interface ToolRegistry {
   getDefinitions(): ToolDefinition[];
   execute(toolCall: ToolCall): Promise<string>;
+  setRunContext?(context: ToolRunContext | null): void;
 }
 
 export class AgentRuntime {
@@ -44,7 +49,6 @@ export class AgentRuntime {
     private maxTurns: number,
     systemPrompt?: string,
     contextConfig: ContextManagerConfig | number = 1_000_000,
-    private vision?: { currentModelMode: 'text' | 'multimodal'; interpreter?: VisionInterpreter },
   ) {
     this.session = new ChatSession(systemPrompt);
     this.contextManager = new ContextManager(typeof contextConfig === 'number'
@@ -77,30 +81,21 @@ export class AgentRuntime {
       const queued = callbacks.takeQueuedUserMessage?.();
       if (!queued) return;
       this.session.addUserMessage(queued.content, queued.attachments);
+      this.tools.setRunContext?.({
+        userMessage: queued.content,
+        attachments: queued.attachments,
+      });
       callbacks.onQueuedUserMessage?.(queued);
     }
   }
 
   async runUserTurn(userMessage: string, attachments: Attachment[], callbacks: AgentCallbacks, signal?: AbortSignal): Promise<RunStepResult> {
     let checkpoint = -1;
+    this.tools.setRunContext?.({ userMessage, attachments });
 
     try {
-      let effectiveMessage = userMessage;
-      let effectiveAttachments = attachments;
-      const imageAttachments = attachments.filter(att => att.type === 'image');
-      if (imageAttachments.length > 0 && this.vision?.currentModelMode === 'text') {
-        if (!this.vision.interpreter) {
-          throw new Error('Current model is text-only and no multimodal image parser model is configured.');
-        }
-        callbacks.onVisionStart?.();
-        const visualContext = await this.vision.interpreter.interpret(userMessage, imageAttachments, signal);
-        callbacks.onVisionResult?.(visualContext);
-        effectiveMessage = `${userMessage}\n\n${visualContext}`;
-        effectiveAttachments = [];
-      }
-
       checkpoint = this.session.createCheckpoint();
-      this.session.addUserMessage(effectiveMessage, effectiveAttachments);
+      this.session.addUserMessage(userMessage, attachments);
 
       for (let turn = 0; turn < this.maxTurns; turn++) {
         if (signal?.aborted) {
@@ -168,6 +163,8 @@ export class AgentRuntime {
       }
       callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       throw error;
+    } finally {
+      this.tools.setRunContext?.(null);
     }
   }
 }

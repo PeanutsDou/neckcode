@@ -8,7 +8,6 @@ import type { ToolRegistry } from './agent/runtime';
 import type { Attachment, ContextStatus, Message, QueuedUserMessage } from './agent/types';
 import { BLOCKING_BUFFER_TOKENS, MAX_RESERVED_OUTPUT_TOKENS, getAutoCompactThreshold } from './agent/context-manager';
 import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig, inferModelMode, getAgents, saveAgent, deleteAgent } from './config';
-import { VisionInterpreter } from './agent/vision-interpreter';
 import type { AppConfigData, ProviderConfig } from './config';
 import type { PermissionMode } from '../shared/permissions';
 import type { AgentConfig, AgentError, AgentErrorCode, ProviderTestCheck, ProviderTestConfig, ProviderTestResult, RunStatusEvent } from '../shared/types';
@@ -64,12 +63,47 @@ function buildSkillsPrompt(): string {
   return lines.join('\n');
 }
 
+function summarizeAgentMemory(memory: string): string {
+  const normalized = memory.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'No specialization notes provided.';
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized;
+}
+
+function buildAgentsPrompt(): string {
+  const agents = getAgents().filter(agent => (agent.name.trim() || agent.id.trim()) && agent.model.trim());
+  if (agents.length === 0) return '';
+
+  const lines = ['## Available Agents'];
+  lines.push('');
+  lines.push('You can delegate work to configured specialist agents with the `invoke_agent` tool.');
+  lines.push('Use `invoke_agent` proactively when a listed agent is a better fit for the task, when a separate context would help, or when an independent subtask can be delegated cleanly.');
+  lines.push('When delegating, pass the exact agent name or ID and make the `task` self-contained with the user goal, relevant files, constraints, and expected output.');
+  lines.push('If the current user turn contains image attachments, `invoke_agent` automatically forwards those images to the sub-agent.');
+  lines.push('If no listed agent clearly fits, solve the task yourself.');
+
+  for (const agent of agents) {
+    const title = agent.name.trim() || agent.id;
+    lines.push('');
+    lines.push(`### ${title}`);
+    lines.push(`ID: ${agent.id}`);
+    lines.push(`Model: ${agent.model}`);
+    if (agent.skills.length > 0) {
+      lines.push(`Skills: ${agent.skills.join(', ')}`);
+    }
+    lines.push(`Specialization: ${summarizeAgentMemory(agent.memory)}`);
+  }
+
+  return lines.join('\n');
+}
+
 function buildFullPrompt(): string {
   const cfg = getConfig();
   const parts = [cfg.systemPrompt];
   if (agentMdContent) parts.push(agentMdContent);
   const skillsPrompt = buildSkillsPrompt();
   if (skillsPrompt) parts.push(skillsPrompt);
+  const agentsPrompt = buildAgentsPrompt();
+  if (agentsPrompt) parts.push(agentsPrompt);
   return parts.join('\n\n');
 }
 
@@ -153,9 +187,6 @@ function classifyAgentError(error: unknown): AgentError {
   } else if (lower.includes('context') || lower.includes('maximum context') || lower.includes('token limit')) {
     code = 'context_limit';
     suggestion = '上下文过长。可以新建会话、减少输入内容，或等待上下文压缩后重试。';
-  } else if (lower.includes('image parser model') || lower.includes('supports vision') || lower.includes('image input')) {
-    code = 'model_not_found';
-    suggestion = '图片解析模型不可用或不支持图片输入。请在设置里选择真实支持视觉输入的多模态模型。';
   } else if (lower.includes('permission') || lower.includes('operation cancelled')) {
     code = 'permission_denied';
     suggestion = '操作被取消或权限不足。确认权限模式和工具确认弹窗。';
@@ -329,19 +360,12 @@ export function setupIpcHandlers(
   function createSessionAgent(sessionId: string, messages?: Message[]): AgentRuntime {
     const cfg = getConfig();
     const modelId = getSessionModelId(sessionId);
-    const modelMode = getModelConfig(modelId)?.mode || inferModelMode(modelId);
-    const parserModel = cfg.vision?.parserModel || '';
-    const parserConfig = parserModel ? getModelConfig(parserModel) : undefined;
-    const interpreter = modelMode === 'text' && parserModel && (parserConfig?.mode || inferModelMode(parserModel)) === 'multimodal'
-      ? new VisionInterpreter(getProvider(parserModel, { stream: false, maxTokens: Math.min(parserConfig?.maxTokens || 4096, 4096) }), parserModel)
-      : undefined;
     const agent = new AgentRuntime(
       getProvider(modelId),
       getTools(sessionId),
       cfg.agent.maxTurns,
       buildFullPrompt(),
       getContextConfig(sessionId),
-      { currentModelMode: modelMode, interpreter },
     );
     if (messages?.length) agent.loadMessages(messages);
     return agent;
@@ -427,7 +451,6 @@ export function setupIpcHandlers(
     let flushTimer: ReturnType<typeof setInterval> | null = null;
     let errorSent = false;
     let thinkingNotified = false;
-    let visionToolCallId: string | null = null;
     const flushDelta = () => {
       if (reasoningBuffer) {
         if (!thinkingNotified) { emitRunStatus(sessionId, { phase: 'thinking' }); thinkingNotified = true; }
@@ -449,25 +472,6 @@ export function setupIpcHandlers(
         {
           onModelRequest() {
             emitRunStatus(sessionId, { phase: 'requesting_model', currentTool: null });
-          },
-          onVisionStart() {
-            emitRunStatus(sessionId, { phase: 'analyzing_image', currentTool: null });
-            visionToolCallId = `vision_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-            getWindow()?.webContents.send('agent:tool-start', sessionId, {
-              id: visionToolCallId,
-              name: 'vision_parse_image',
-              argumentsText: JSON.stringify({ mode: '视觉解析', output: '结构化视觉上下文' }),
-            });
-          },
-          onVisionResult(document) {
-            const toolCallId = visionToolCallId || `vision_${Date.now()}`;
-            getWindow()?.webContents.send('agent:tool-result', sessionId, {
-              toolCallId,
-              name: 'vision_parse_image',
-              argumentsText: JSON.stringify({ mode: '视觉解析', output: '结构化视觉上下文' }),
-              result: document,
-            });
-            visionToolCallId = null;
           },
           onContextUpdate(status) {
             emitRunStatus(sessionId, {
@@ -742,7 +746,6 @@ export function setupIpcHandlers(
       models: getAllModelNames(),
       modelContexts,
       providers: cfg.providers.map(p => ({ id: p.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, models: p.models })),
-      vision: cfg.vision || {},
       activeProvider: cfg.activeProvider,
       workspaceRoot: cfg.agent.workspaceRoot,
       maxTurns: cfg.agent.maxTurns,
@@ -775,9 +778,6 @@ export function setupIpcHandlers(
     else if (key === 'maxTurns') cfg.agent.maxTurns = value as number;
     else if (key === 'maxTokens') cfg.agent.maxTokens = value as number;
     else if (key === 'contextLimit') cfg.agent.contextLimit = value as number;
-    else if (key === 'visionParserModel') {
-      cfg.vision = { ...(cfg.vision || {}), parserModel: value as string, visibility: 'collapsed', pipeline: 'adaptive' };
-    }
     else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
     else if (key === 'workspaceRoot') { cfg.agent.workspaceRoot = value as string; await saveConfig(); return; }
     else if (key === 'theme') { cfg.theme = value as 'light' | 'dark'; await saveConfig(); return; }

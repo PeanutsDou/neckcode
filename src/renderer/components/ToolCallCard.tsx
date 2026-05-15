@@ -17,7 +17,6 @@ const TOOL_META: Record<string, { icon: string; label: string; color: string }> 
   grep: { icon: 'S', label: 'Grep', color: '#a6adc8' },
   web_fetch: { icon: 'F', label: 'Fetch', color: '#74c7ec' },
   web_search: { icon: 'Q', label: 'Search', color: '#74c7ec' },
-  vision_parse_image: { icon: 'V', label: '图片解析', color: '#74c7ec' },
   task_create: { icon: '+', label: 'Task +', color: '#a6adc8' },
   task_get: { icon: 'T', label: 'Task', color: '#a6adc8' },
   task_list: { icon: 'T', label: 'Tasks', color: '#a6adc8' },
@@ -25,6 +24,7 @@ const TOOL_META: Record<string, { icon: string; label: string; color: string }> 
   notebook_edit: { icon: 'N', label: 'Notebook', color: '#a6adc8' },
   list_skills: { icon: '*', label: 'Skills', color: '#a6adc8' },
   invoke_skill: { icon: '*', label: 'Skill', color: '#a6adc8' },
+  invoke_agent: { icon: 'A', label: 'Agent', color: '#6a8fba' },
 };
 
 const LARGE_TOOL_RESULT_THRESHOLD = 30_000;

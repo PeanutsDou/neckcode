@@ -72,8 +72,6 @@ export interface QueuedUserMessage {
 
 export interface AgentCallbacks {
   onModelRequest?: () => void;
-  onVisionStart?: () => void;
-  onVisionResult?: (document: string) => void;
   onContextUpdate?: (status: ContextStatus) => void;
   onDelta?: (text: string) => void;
   onReasoning?: (text: string) => void;

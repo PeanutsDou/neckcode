@@ -3,6 +3,7 @@ import { createToolRegistry } from './registry';
 import { getConfig } from '../config';
 import { getLoadedSkills, renderSkillForInvocation } from '../skills/loader';
 import type { Provider, ToolRegistry } from '../agent/runtime';
+import type { Attachment } from '../agent/types';
 import type { AgentConfig } from '../../shared/types';
 
 /**
@@ -37,6 +38,7 @@ function buildSubAgentPrompt(agent: AgentConfig): string {
 async function runSubAgent(
   agent: AgentConfig,
   task: string,
+  attachments: Attachment[],
   createProvider: (modelId?: string) => Provider,
   signal?: AbortSignal,
 ): Promise<string> {
@@ -70,7 +72,7 @@ async function runSubAgent(
 
   const result = await runtime.runUserTurn(
     task,
-    [],
+    attachments,
     {
       onToolStart(tc) {
         toolLog.push({ name: tc.name, args: tc.argumentsText, result: '' });
@@ -124,7 +126,10 @@ export function createInvokeAgentHandler(
   getAgents: () => AgentConfig[],
   createProvider: (modelId?: string) => Provider,
 ) {
-  return async (args: Record<string, unknown>): Promise<string> => {
+  return async (
+    args: Record<string, unknown>,
+    context?: { userMessage?: string; attachments?: Attachment[] } | null,
+  ): Promise<string> => {
     const agentNameOrId = String(args.agent || '').trim();
     const task = String(args.task || '').trim();
 
@@ -143,7 +148,14 @@ export function createInvokeAgentHandler(
     }
 
     try {
-      const result = await runSubAgent(agent, task, createProvider);
+      const attachments = Array.isArray(context?.attachments)
+        ? context.attachments.filter(att => att?.type === 'image' && typeof att.data === 'string' && typeof att.mimeType === 'string')
+        : [];
+      const parentUserMessage = typeof context?.userMessage === 'string' ? context.userMessage.trim() : '';
+      const effectiveTask = parentUserMessage && parentUserMessage !== task
+        ? `${task}\n\n[Parent user message for context]\n${parentUserMessage}`
+        : task;
+      const result = await runSubAgent(agent, effectiveTask, attachments, createProvider);
       return result;
     } catch (err) {
       return `ERROR: Sub-agent "${agent.name}" failed: ${err instanceof Error ? err.message : String(err)}`;
