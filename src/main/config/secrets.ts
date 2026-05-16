@@ -7,18 +7,32 @@ const ALGO = 'aes-256-gcm';
 const KEY_FILE = join(homedir(), '.deepseekcode', '.key');
 
 let masterKey: Buffer | null = null;
+let keyGenerationError: string | null = null;
 
 async function getKey(): Promise<Buffer> {
   if (masterKey) return masterKey;
   try {
     const raw = await fs.readFile(KEY_FILE, 'utf8');
     masterKey = Buffer.from(raw.trim(), 'hex');
-  } catch {
-    masterKey = randomBytes(32);
-    await fs.mkdir(join(homedir(), '.deepseekcode'), { recursive: true });
-    await fs.writeFile(KEY_FILE, masterKey.toString('hex'), 'utf8');
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException | undefined;
+    if (error?.code === 'ENOENT') {
+      // First-time setup: config dir doesn't exist yet, safe to generate new key
+      masterKey = randomBytes(32);
+      await fs.mkdir(join(homedir(), '.deepseekcode'), { recursive: true });
+      await fs.writeFile(KEY_FILE, masterKey.toString('hex'), 'utf8');
+    } else {
+      // Key file exists but cannot be read — do NOT generate a new key
+      // because that would make all encrypted API keys undecryptable
+      keyGenerationError = `Cannot read encryption key at ${KEY_FILE}: ${(err as Error).message}`;
+      throw new Error(keyGenerationError);
+    }
   }
   return masterKey;
+}
+
+export function getKeyError(): string | null {
+  return keyGenerationError;
 }
 
 export async function encrypt(plaintext: string): Promise<string> {
