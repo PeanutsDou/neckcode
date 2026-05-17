@@ -1,0 +1,4 @@
+interface:
+  display_name: "GoodDay 八字"
+  short_description: "计算八字干支五行并辅助生成每日运势和问事参考分析内容"
+  default_prompt: "保存我的生辰信息，并计算今天的八字五行与运势参考。"
