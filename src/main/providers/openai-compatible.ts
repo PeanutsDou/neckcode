@@ -10,6 +10,8 @@ export interface OpenAIConfig {
   temperature?: number;
   maxTokens?: number;
   supportsVision?: boolean;
+  thinkingEnabled?: boolean;
+  reasoningEffort?: 'high' | 'max';
   // Default max_tokens is 16384 — avoids truncation on long replies
 }
 
@@ -64,10 +66,14 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
 
   // Normalize base URL: strip trailing /chat/completions etc. if user accidentally pasted the full endpoint
   const baseUrl = config.baseUrl.replace(/\/(chat\/completions|completions|v1)\/?$/, '');
+  const baseUrlLower = baseUrl.toLowerCase();
 
   return {
     async runStep({ messages, tools, model, onDelta, onReasoning, signal }) {
       const actualModel = model === 'default' ? config.model : model;
+      const modelLower = actualModel.toLowerCase();
+      const useDeepSeekThinking = config.thinkingEnabled !== false
+        && (baseUrlLower.includes('deepseek') || modelLower.includes('deepseek'));
 
       // Handle images for messages
       const processed = messages.map(msg => {
@@ -113,6 +119,10 @@ export function createOpenAIProvider(config: OpenAIConfig): Provider {
           stream_options: wantsStreaming ? { include_usage: true } : undefined,
           temperature: config.temperature ?? 0,
           max_tokens: config.maxTokens ?? 16384,
+          ...(useDeepSeekThinking ? {
+            thinking: { type: 'enabled' },
+            reasoning_effort: config.reasoningEffort || 'max',
+          } : {}),
         }),
         signal,
       });

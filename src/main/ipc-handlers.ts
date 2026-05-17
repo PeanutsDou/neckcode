@@ -807,6 +807,7 @@ export function setupIpcHandlers(
 
   ipcMain.handle('config:set-provider', async (_event, pc: ProviderConfig) => {
     const cfg = getConfig();
+    if (!pc?.id?.trim()) throw new Error('Provider id is required');
     const idx = cfg.providers.findIndex(p => p.id === pc.id);
     if (idx >= 0) {
       const existing = cfg.providers[idx];
@@ -818,7 +819,15 @@ export function setupIpcHandlers(
         models: Array.isArray(pc.models) ? pc.models : existing.models,
       };
     } else {
-      cfg.providers.push({ ...pc, models: Array.isArray(pc.models) ? pc.models : [] });
+      if (!pc.name?.trim()) throw new Error('Provider name is required');
+      if (!pc.baseUrl?.trim()) throw new Error('Provider baseUrl is required');
+      cfg.providers.push({
+        id: pc.id.trim(),
+        name: pc.name.trim(),
+        baseUrl: pc.baseUrl.trim(),
+        apiKey: pc.apiKey || '',
+        models: Array.isArray(pc.models) ? pc.models : [],
+      });
     }
     await saveConfig();
   });

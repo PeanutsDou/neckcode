@@ -50,6 +50,8 @@ export interface AppConfigData {
 
 const CONFIG_DIR = join(homedir(), '.deepseekcode');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
+const CONFIG_BAK_FILE = join(CONFIG_DIR, 'config.json.bak');
+const CONFIG_TMP_FILE = join(CONFIG_DIR, 'config.json.tmp');
 
 const DEFAULT_PROVIDERS: ProviderConfig[] = [
   {
@@ -91,7 +93,28 @@ const defaultConfig: AppConfigData = {
   agents: [],
 };
 
-let config: AppConfigData = { ...defaultConfig };
+let config: AppConfigData = cloneDefaultConfig();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function cloneProvider(provider: ProviderConfig): ProviderConfig {
+  return {
+    ...provider,
+    models: provider.models.map(model => ({ ...model })),
+  };
+}
+
+function cloneDefaultConfig(): AppConfigData {
+  return {
+    ...defaultConfig,
+    providers: DEFAULT_PROVIDERS.map(cloneProvider),
+    agent: { ...defaultConfig.agent },
+    window: defaultConfig.window ? { ...defaultConfig.window } : undefined,
+    agents: defaultConfig.agents.map(agent => ({ ...agent, skills: [...agent.skills] })),
+  };
+}
 
 function normalizePermissionMode(value: unknown): PermissionMode {
   return value === 'fullAccess' ? 'fullAccess' : 'default';
@@ -150,6 +173,43 @@ function normalizeModels(raw: unknown): ModelConfig[] {
     .filter((m): m is ModelConfig => m !== null);
 }
 
+function normalizeProvider(raw: unknown): ProviderConfig | null {
+  if (!isRecord(raw)) return null;
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const baseUrl = typeof raw.baseUrl === 'string' ? raw.baseUrl.trim() : '';
+  if (!id || !name || !baseUrl) return null;
+  return {
+    id,
+    name,
+    baseUrl,
+    apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
+    models: normalizeModels(raw.models),
+  };
+}
+
+function normalizeLoadedConfig(loaded: AppConfigData): AppConfigData {
+  loaded.providers = Array.isArray(loaded.providers)
+    ? loaded.providers.map(normalizeProvider).filter((p): p is ProviderConfig => p !== null)
+    : [];
+  if (!Array.isArray(loaded.providers) || loaded.providers.length === 0) {
+    loaded.providers = DEFAULT_PROVIDERS.map(cloneProvider);
+  }
+  loaded.permissionMode = normalizePermissionMode(loaded.permissionMode);
+  loaded.agents = normalizeAgents(loaded.agents);
+
+  const providerForActiveModel = loaded.providers.find(p => p.models.some(m => m.name === loaded.activeModel));
+  if (!loaded.providers.some(p => p.id === loaded.activeProvider)) {
+    loaded.activeProvider = providerForActiveModel?.id || loaded.providers[0]?.id || defaultConfig.activeProvider;
+  }
+  if (!loaded.activeModel || !loaded.providers.some(p => p.models.some(m => m.name === loaded.activeModel))) {
+    loaded.activeModel = loaded.providers.find(p => p.id === loaded.activeProvider)?.models[0]?.name
+      || loaded.providers[0]?.models[0]?.name
+      || defaultConfig.activeModel;
+  }
+  return loaded;
+}
+
 function stripRemovedConfigKeys(raw: Record<string, unknown>): Record<string, unknown> {
   const cleaned = { ...raw };
   delete cleaned.vision;
@@ -206,23 +266,19 @@ export function deleteAgent(agentId: string): void {
 function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
   const cleanedRaw = stripRemovedConfigKeys(raw);
   if (Array.isArray(raw.providers)) {
-    const providers = (raw.providers as Array<Record<string, unknown>>).map(p => ({
-      id: p.id as string,
-      name: p.name as string,
-      baseUrl: p.baseUrl as string,
-      apiKey: p.apiKey as string,
-      models: normalizeModels(p.models),
-    }));
-    return {
-      ...defaultConfig,
+    const providers = raw.providers
+      .map(normalizeProvider)
+      .filter((p): p is ProviderConfig => p !== null);
+    return normalizeLoadedConfig({
+      ...cloneDefaultConfig(),
       ...cleanedRaw,
-      providers,
-      agent: { ...defaultConfig.agent, ...(cleanedRaw.agent as Record<string, unknown> || {}) },
-    } as AppConfigData;
+      providers: providers.length > 0 ? providers : DEFAULT_PROVIDERS.map(cloneProvider),
+      agent: { ...defaultConfig.agent, ...(isRecord(cleanedRaw.agent) ? cleanedRaw.agent : {}) },
+    } as AppConfigData);
   }
 
   // Migrate from old deepseek/anthropic format
-  const providers: ProviderConfig[] = [...DEFAULT_PROVIDERS];
+  const providers: ProviderConfig[] = DEFAULT_PROVIDERS.map(cloneProvider);
   const ds = raw.deepseek as Record<string, unknown> | undefined;
   const ant = raw.anthropic as Record<string, unknown> | undefined;
 
@@ -238,49 +294,95 @@ function migrateLegacy(raw: Record<string, unknown>): AppConfigData {
     if (Array.isArray(ant.models)) p.models = normalizeModels(ant.models);
   }
 
-  return {
-    ...defaultConfig,
+  return normalizeLoadedConfig({
+    ...cloneDefaultConfig(),
     ...cleanedRaw,
     providers,
     activeModel: (cleanedRaw.activeModel as string) || defaultConfig.activeModel,
-    agent: { ...defaultConfig.agent, ...(cleanedRaw.agent as Record<string, unknown> || {}) },
+    agent: { ...defaultConfig.agent, ...(isRecord(cleanedRaw.agent) ? cleanedRaw.agent : {}) },
     deepseek: undefined,
     anthropic: undefined,
-  } as unknown as AppConfigData;
+  } as unknown as AppConfigData);
+}
+
+async function isReadableConfig(filePath: string): Promise<boolean> {
+  try {
+    const raw = JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown;
+    if (!isRecord(raw)) return false;
+    if (Array.isArray(raw.providers)) return raw.providers.some(p => normalizeProvider(p) !== null);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tryLoadFromFile(filePath: string): Promise<AppConfigData | null> {
+  try {
+    const data = await fs.readFile(filePath, 'utf8');
+    const raw = JSON.parse(data) as Record<string, unknown>;
+    const loaded = migrateLegacy(raw);
+    for (const p of loaded.providers) {
+      if (!p.apiKey) continue;
+      try {
+        p.apiKey = await decrypt(p.apiKey);
+      } catch (err) {
+        console.error(`Failed to decrypt API key for provider "${p.id}", keeping stored value:`, err);
+      }
+    }
+    return loaded;
+  } catch {
+    return null;
+  }
 }
 
 export async function loadConfig(): Promise<AppConfigData> {
-  try {
-    await fs.mkdir(CONFIG_DIR, { recursive: true });
-    const data = await fs.readFile(CONFIG_FILE, 'utf8');
-    const raw = JSON.parse(data) as Record<string, unknown>;
-    config = migrateLegacy(raw);
-    config.permissionMode = normalizePermissionMode(config.permissionMode);
-    config.agents = normalizeAgents(config.agents);
-    for (const p of config.providers) {
-      if (p.apiKey) p.apiKey = await decrypt(p.apiKey);
-    }
-  } catch (err) {
-    config = { ...defaultConfig };
-    const error = err as NodeJS.ErrnoException | undefined;
-    if (error?.code === 'ENOENT') {
-      await saveConfig();
-    } else {
-      console.error('Failed to load config, using in-memory defaults without overwriting disk config:', err);
-    }
+  await fs.mkdir(CONFIG_DIR, { recursive: true });
+
+  // 1. Try primary config
+  const primary = await tryLoadFromFile(CONFIG_FILE);
+  if (primary) {
+    config = primary;
+    return config;
   }
+
+  // 2. Try backup
+  const backup = await tryLoadFromFile(CONFIG_BAK_FILE);
+  if (backup) {
+    console.warn('Primary config corrupted or missing, restored from backup.');
+    config = backup;
+    // Restore primary from backup immediately
+    await saveConfig();
+    return config;
+  }
+
+  // 3. First-time setup — create fresh config
+  config = cloneDefaultConfig();
+  await saveConfig();
   return config;
 }
 
 export async function saveConfig(): Promise<void> {
   try {
     await fs.mkdir(CONFIG_DIR, { recursive: true });
+    config = normalizeLoadedConfig(config);
     const toSave = { ...config, providers: await Promise.all(config.providers.map(async p => ({
       ...p,
       apiKey: p.apiKey ? await encrypt(p.apiKey) : '',
     }))) };
-    await fs.writeFile(CONFIG_FILE, JSON.stringify(toSave, null, 2), 'utf8');
+    const serialized = JSON.stringify(toSave, null, 2);
+    JSON.parse(serialized);
+    await fs.writeFile(CONFIG_TMP_FILE, serialized, 'utf8');
+    if (await isReadableConfig(CONFIG_FILE)) {
+      try { await fs.copyFile(CONFIG_FILE, CONFIG_BAK_FILE); } catch {}
+    }
+    try {
+      await fs.rename(CONFIG_TMP_FILE, CONFIG_FILE);
+    } catch {
+      await fs.copyFile(CONFIG_TMP_FILE, CONFIG_FILE);
+      await fs.rm(CONFIG_TMP_FILE, { force: true });
+    }
   } catch (err) {
     console.error('Failed to save config:', err);
+    try { await fs.rm(CONFIG_TMP_FILE, { force: true }); } catch {}
   }
 }
