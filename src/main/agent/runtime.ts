@@ -160,6 +160,9 @@ export class AgentRuntime {
         // Unexpected error: roll back this turn
         this.session.restore(checkpoint);
         callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
+      } else if (signal?.aborted) {
+        this.session.repairIncompleteToolResults();
+        callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
       }
       callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       throw error;

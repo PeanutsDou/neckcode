@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { repairToolCallMessages } from './agent/session';
 
 export interface SessionData {
   id: string;
@@ -59,7 +60,7 @@ function rowToSession(row: SessionRow, includeMessages: boolean): SessionData {
   };
   if (includeMessages) {
     session.messages = parseArrayJson(row.messages_json);
-    session.agentMessages = parseArrayJson(row.agent_messages_json);
+    session.agentMessages = repairToolCallMessages(parseArrayJson(row.agent_messages_json) as any);
   }
   return session;
 }
@@ -144,7 +145,7 @@ export function saveSession(session: SessionData): void {
     projectPath: session.projectPath ?? existing?.projectPath,
     modelId: session.modelId ?? existing?.modelId,
     messages: session.messages ?? existing?.messages ?? [],
-    agentMessages: session.agentMessages ?? existing?.agentMessages ?? [],
+    agentMessages: repairToolCallMessages((session.agentMessages ?? existing?.agentMessages ?? []) as any),
     createdAt: session.createdAt || existing?.createdAt || now,
     updatedAt: session.updatedAt || now,
     pinnedAt: session.pinnedAt !== undefined ? session.pinnedAt : existing?.pinnedAt ?? null,

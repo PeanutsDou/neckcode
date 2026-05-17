@@ -7,6 +7,55 @@ export interface UsageAnchor {
   messageCount: number;
 }
 
+const INTERRUPTED_TOOL_RESULT = 'Tool call did not complete because the previous run was interrupted.';
+
+function cloneMessages(messages: Message[]): Message[] {
+  return JSON.parse(JSON.stringify(messages)) as Message[];
+}
+
+export function repairToolCallMessages(messages: Message[]): Message[] {
+  const repaired: Message[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+
+    if (message.role === 'tool') {
+      continue;
+    }
+
+    repaired.push(message);
+
+    if (message.role !== 'assistant' || !message.toolCalls?.length) {
+      continue;
+    }
+
+    const expected = new Set(message.toolCalls.map(tc => tc.id).filter(Boolean));
+    const seen = new Set<string>();
+
+    while (i + 1 < messages.length && messages[i + 1].role === 'tool') {
+      const toolMessage = messages[i + 1];
+      i++;
+      const id = toolMessage.toolCallId || '';
+      if (!expected.has(id) || seen.has(id)) {
+        continue;
+      }
+      repaired.push(toolMessage);
+      seen.add(id);
+    }
+
+    for (const toolCall of message.toolCalls) {
+      if (!toolCall.id || seen.has(toolCall.id)) continue;
+      repaired.push({
+        role: 'tool',
+        toolCallId: toolCall.id,
+        content: INTERRUPTED_TOOL_RESULT,
+      });
+    }
+  }
+
+  return repaired;
+}
+
 export class ChatSession {
   private messages: Message[] = [];
   private checkpoints: Message[][] = [];
@@ -52,7 +101,7 @@ export class ChatSession {
     if (this.systemPrompt) {
       result.push({ role: 'system', content: this.systemPrompt });
     }
-    result.push(...this.messages);
+    result.push(...repairToolCallMessages(this.messages));
     return result;
   }
 
@@ -72,13 +121,20 @@ export class ChatSession {
   }
 
   setMessages(messages: Message[]): void {
-    this.messages = messages;
+    this.messages = repairToolCallMessages(cloneMessages(messages));
     this.checkpoints = [];
     this.usageAnchor = null;
   }
 
+  repairIncompleteToolResults(): void {
+    this.messages = repairToolCallMessages(this.messages);
+    if (this.usageAnchor && this.usageAnchor.messageCount > this.messages.length) {
+      this.usageAnchor = null;
+    }
+  }
+
   getMessages(): Message[] {
-    return JSON.parse(JSON.stringify(this.messages)) as Message[];
+    return cloneMessages(repairToolCallMessages(this.messages));
   }
 
   clear(): void {
