@@ -5,6 +5,8 @@ release/
 *.db
 skills/
 !skills/self-dev/
+!skills/liuren-shefu/
+!skills/goodday-bazi/
 .deepseekcode/
 # Compiled TS artifacts in src/
 src/**/*.js
