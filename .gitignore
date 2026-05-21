@@ -19,3 +19,8 @@ src/**/*.d.ts.map
 # Log files
 .tmp-electron-*.log
 dist-*.log
+server-std*.log
+
+# IM Server
+server/data/
+data/

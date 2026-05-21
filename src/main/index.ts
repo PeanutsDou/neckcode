@@ -2,6 +2,7 @@
 import path from 'path';
 import { autoUpdater } from 'electron-updater';
 import { setupIpcHandlers } from './ipc-handlers';
+import { setupImIpcHandlers } from './im/im-ipc';
 import { createOpenAIProvider } from './providers/openai-compatible';
 import { createAnthropicProvider } from './providers/anthropic';
 import { createToolRegistry } from './tools/registry';
@@ -398,7 +399,9 @@ app.whenReady().then(async () => {
   const { initAgentMd, initSkills } = require('./ipc-handlers');
   await initAgentMd();
   await initSkills();
+  setupImIpcHandlers();
   createWindow();
+  setupImIpcHandlers(mainWindow);
   createTray();
   setupAutoUpdater();
 

@@ -13,6 +13,7 @@ import { AgentDialog } from './components/AgentDialog';
 import { WorkspaceBar } from './components/WorkspaceBar';
 import { ImageViewer } from './components/ImageViewer';
 import { CloseDialog } from './components/CloseDialog';
+import { ImShell } from './components/im/ImShell';
 import { ResizeHandle } from './components/ResizeHandle';
 import { UpdateBanner } from './components/UpdateBanner';
 import { useAppStore } from './stores/app-store';
@@ -69,6 +70,7 @@ export default function App() {
       return next;
     });
   };
+  const [mainMode, setMainMode] = useState<'agent' | 'im'>('agent');
   const toolbarRef = React.useRef<HTMLDivElement>(null);
   const appearanceRef = React.useRef<HTMLDivElement>(null);
 
@@ -161,6 +163,8 @@ export default function App() {
           <div className="toolbar-left">
             <img src="./icon.png" className="toolbar-icon" alt="" />
             <span className="toolbar-title">DeepSeek Code</span>
+            <button className={'toolbar-btn' + (mainMode === 'agent' ? ' active' : '')} onClick={() => setMainMode('agent')} style={{ marginLeft: 12 }}>Agent</button>
+            <button className={'toolbar-btn' + (mainMode === 'im' ? ' active' : '')} onClick={() => setMainMode('im')}>IM</button>
             <span className="toolbar-version" style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>v{version}</span>
           </div>
           <div className="toolbar-center" />
@@ -236,45 +240,53 @@ export default function App() {
         </div>
 
         {/* Main content */}
-        {showSidebar ? (
-          <div className="code-panel-full">
-            <div className="code-panel-topbar">
-              <WorkspaceBar />
-              <button className="toolbar-btn code-panel-close" onClick={toggleSidebar} title="返回聊天">
-                <span style={{ fontSize: 18 }}>←</span>
-              </button>
-            </div>
-            <div className="code-panel-body">
-              <div className="code-panel-left" style={{ width: codeLeftWidth }}>
-                <FileTree />
-              </div>
-              <ResizeHandle direction="left" onResize={handleCodeResize} />
-              <div className="code-panel-right">
-                <EditorTabs />
-                <EditorPanel />
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="main-content">
-            {showSessions && (
-              <>
-                <div className="sidebar-left" style={{ width: leftWidth }}>
-                  <SessionList />
-                  <div className="sidebar-left-bottom">
-                    <UpdateBanner />
-                    <ContextBar />
+        {(() => {
+          if (mainMode === 'im') {
+            return <ImShell />;
+          }
+          if (showSidebar) {
+            return (
+              <div className="code-panel-full">
+                <div className="code-panel-topbar">
+                  <WorkspaceBar />
+                  <button className="toolbar-btn code-panel-close" onClick={toggleSidebar} title="返回聊天">
+                    <span style={{ fontSize: 18 }}>←</span>
+                  </button>
+                </div>
+                <div className="code-panel-body">
+                  <div className="code-panel-left" style={{ width: codeLeftWidth }}>
+                    <FileTree />
+                  </div>
+                  <ResizeHandle direction="left" onResize={handleCodeResize} />
+                  <div className="code-panel-right">
+                    <EditorTabs />
+                    <EditorPanel />
                   </div>
                 </div>
-                <ResizeHandle direction="left" onResize={setLeftWidth} />
-              </>
-            )}
+              </div>
+            );
+          }
+          return (
+            <div className="main-content">
+              {showSessions && (
+                <>
+                  <div className="sidebar-left" style={{ width: leftWidth }}>
+                    <SessionList />
+                    <div className="sidebar-left-bottom">
+                      <UpdateBanner />
+                      <ContextBar />
+                    </div>
+                  </div>
+                  <ResizeHandle direction="left" onResize={setLeftWidth} />
+                </>
+              )}
 
-            <div className="chat-main">
-              <ChatPanel />
+              <div className="chat-main">
+                <ChatPanel />
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <SkillsDialog open={skillsOpen} onClose={() => setSkillsOpen(false)} />
