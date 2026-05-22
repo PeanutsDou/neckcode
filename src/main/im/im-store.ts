@@ -8,8 +8,6 @@ import type {
   ImMessageStatus,
 } from '../../shared/im-types';
 
-// ─── 初始化 IM 表 ───
-
 export function initImStore(): void {
   const db = getDb();
   db.exec(`
@@ -70,6 +68,9 @@ export function initImStore(): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_im_dm_peer_created ON im_direct_messages(owner_user_id, peer_user_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_im_dm_message_id
+      ON im_direct_messages(owner_user_id, message_id)
+      WHERE message_id IS NOT NULL AND message_id != '';
 
     CREATE TABLE IF NOT EXISTS im_conversations (
       owner_user_id TEXT NOT NULL,
@@ -86,8 +87,6 @@ export function initImStore(): void {
     CREATE INDEX IF NOT EXISTS idx_im_conv_updated ON im_conversations(owner_user_id, updated_at DESC);
   `);
 }
-
-// ─── 本地用户 ───
 
 export function getLocalUser(): (ImUser & { token: string; tokenExpiresAt: number; serverUrl: string }) | null {
   const db = getDb();
@@ -121,11 +120,8 @@ export function saveLocalUser(user: { userId: string; username: string; displayN
 }
 
 export function clearLocalUser(): void {
-  const db = getDb();
-  db.prepare('DELETE FROM im_local_user').run();
+  getDb().prepare('DELETE FROM im_local_user').run();
 }
-
-// ─── 好友 ───
 
 export function upsertFriends(ownerUserId: string, friends: ImFriend[]): void {
   const db = getDb();
@@ -146,26 +142,36 @@ export function upsertFriends(ownerUserId: string, friends: ImFriend[]): void {
   const tx = db.transaction(() => {
     for (const f of friends) {
       stmt.run(ownerUserId, f.userId, f.username, f.displayName, f.avatar, f.status, f.online ? 1 : 0, f.lastSeenAt, now);
+      removeFriendRequest(ownerUserId, f.userId);
+      upsertConversation(ownerUserId, f.userId, f.username, f.displayName, { unreadDelta: 0 });
     }
   });
   tx();
 }
 
-export function listCachedFriends(ownerUserId: string): ImFriend[] {
+export function removeFriend(ownerUserId: string, friendId: string): void {
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM im_friends WHERE owner_user_id = ?').all(ownerUserId) as Array<Record<string, unknown>>;
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM im_friends WHERE owner_user_id = ? AND friend_id = ?').run(ownerUserId, friendId);
+    db.prepare('DELETE FROM im_friend_requests WHERE owner_user_id = ? AND user_id = ?').run(ownerUserId, friendId);
+    db.prepare('DELETE FROM im_conversations WHERE owner_user_id = ? AND peer_user_id = ?').run(ownerUserId, friendId);
+  });
+  tx();
+}
+
+export function listCachedFriends(ownerUserId: string): ImFriend[] {
+  const rows = getDb().prepare('SELECT * FROM im_friends WHERE owner_user_id = ? ORDER BY updated_at DESC')
+    .all(ownerUserId) as Array<Record<string, unknown>>;
   return rows.map((r) => ({
     userId: r.friend_id as string,
     username: r.username as string,
     displayName: r.display_name as string,
     avatar: r.avatar as string | null,
-    status: 'accepted' as const,
+    status: 'accepted',
     online: Boolean(r.online),
     lastSeenAt: r.last_seen_at as number | null,
   }));
 }
-
-// ─── 好友申请 ───
 
 export function upsertFriendRequest(ownerUserId: string, request: ImFriendRequest): void {
   const db = getDb();
@@ -174,26 +180,40 @@ export function upsertFriendRequest(ownerUserId: string, request: ImFriendReques
     INSERT INTO im_friend_requests (owner_user_id, user_id, username, display_name, avatar, direction, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(owner_user_id, user_id, direction) DO UPDATE SET
+      username = excluded.username,
+      display_name = excluded.display_name,
+      avatar = excluded.avatar,
       status = excluded.status,
       updated_at = excluded.updated_at
   `).run(ownerUserId, request.userId, request.username, request.displayName, request.avatar, request.direction, request.status, request.createdAt, now);
 }
 
-export function listFriendRequests(ownerUserId: string): ImFriendRequest[] {
+export function replaceFriendRequests(ownerUserId: string, requests: ImFriendRequest[]): void {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM im_friend_requests WHERE owner_user_id = ? AND status = 'pending'").all(ownerUserId) as Array<Record<string, unknown>>;
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM im_friend_requests WHERE owner_user_id = ? AND status = 'pending'").run(ownerUserId);
+    for (const request of requests) upsertFriendRequest(ownerUserId, request);
+  });
+  tx();
+}
+
+export function removeFriendRequest(ownerUserId: string, userId: string): void {
+  getDb().prepare('DELETE FROM im_friend_requests WHERE owner_user_id = ? AND user_id = ?').run(ownerUserId, userId);
+}
+
+export function listFriendRequests(ownerUserId: string): ImFriendRequest[] {
+  const rows = getDb().prepare("SELECT * FROM im_friend_requests WHERE owner_user_id = ? AND status = 'pending' ORDER BY created_at DESC")
+    .all(ownerUserId) as Array<Record<string, unknown>>;
   return rows.map((r) => ({
     userId: r.user_id as string,
     username: r.username as string,
     displayName: r.display_name as string,
     avatar: r.avatar as string | null,
     direction: r.direction as 'in' | 'out',
-    status: r.status as 'pending',
+    status: 'pending',
     createdAt: r.created_at as number,
   }));
 }
-
-// ─── 消息 ───
 
 export function insertPendingMessage(ownerUserId: string, localId: string, peerUserId: string, fromUser: string, toUser: string, content: string): void {
   const db = getDb();
@@ -205,20 +225,27 @@ export function insertPendingMessage(ownerUserId: string, localId: string, peerU
 }
 
 export function markMessageSent(ownerUserId: string, localId: string, messageId: string, createdAt: number): void {
-  const db = getDb();
-  db.prepare(`
-    UPDATE im_direct_messages SET message_id = ?, status = 'sent', created_at = ?, updated_at = ? WHERE owner_user_id = ? AND local_id = ?
+  getDb().prepare(`
+    UPDATE im_direct_messages
+    SET message_id = ?, status = 'sent', created_at = ?, updated_at = ?
+    WHERE owner_user_id = ? AND local_id = ?
   `).run(messageId, createdAt, Date.now(), ownerUserId, localId);
 }
 
 export function markMessageFailed(ownerUserId: string, localId: string): void {
-  const db = getDb();
-  db.prepare("UPDATE im_direct_messages SET status = 'failed', updated_at = ? WHERE owner_user_id = ? AND local_id = ?")
+  getDb().prepare("UPDATE im_direct_messages SET status = 'failed', updated_at = ? WHERE owner_user_id = ? AND local_id = ?")
     .run(Date.now(), ownerUserId, localId);
 }
 
 export function insertIncomingMessage(ownerUserId: string, msg: {
-  messageId: string; fromUser: string; toUser: string; content: string; msgType?: string; createdAt: number;
+  messageId: string;
+  fromUser: string;
+  toUser: string;
+  content: string;
+  msgType?: string;
+  createdAt: number;
+  deliveredAt?: number | null;
+  readAt?: number | null;
 }): boolean {
   const db = getDb();
   const now = Date.now();
@@ -226,41 +253,60 @@ export function insertIncomingMessage(ownerUserId: string, msg: {
   const direction = msg.fromUser === ownerUserId ? 'out' : 'in';
   const localId = `svr:${msg.messageId}`;
 
-  try {
-    const info = db.prepare(`
-      INSERT OR IGNORE INTO im_direct_messages (owner_user_id, local_id, message_id, peer_user_id, from_user, to_user, direction, content, msg_type, status, created_at, local_created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?)
-    `).run(ownerUserId, localId, msg.messageId, peerUserId, msg.fromUser, msg.toUser, direction, msg.content, msg.msgType || 'text', msg.createdAt, now, now);
-    return info.changes > 0;
-  } catch {
-    return false;
-  }
+  const info = db.prepare(`
+    INSERT INTO im_direct_messages (
+      owner_user_id, local_id, message_id, peer_user_id, from_user, to_user,
+      direction, content, msg_type, status, created_at, delivered_at, read_at, local_created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?, ?)
+    ON CONFLICT(owner_user_id, local_id) DO UPDATE SET
+      message_id = excluded.message_id,
+      content = excluded.content,
+      status = excluded.status,
+      delivered_at = excluded.delivered_at,
+      read_at = excluded.read_at,
+      updated_at = excluded.updated_at
+  `).run(
+    ownerUserId,
+    localId,
+    msg.messageId,
+    peerUserId,
+    msg.fromUser,
+    msg.toUser,
+    direction,
+    msg.content,
+    msg.msgType || 'text',
+    msg.createdAt,
+    msg.deliveredAt || null,
+    msg.readAt || null,
+    now,
+    now,
+  );
+  return info.changes > 0;
 }
 
 export function listMessages(ownerUserId: string, peerUserId: string, limit = 50, before?: number): ImMessage[] {
-  const db = getDb();
   let rows: Array<Record<string, unknown>>;
   if (before) {
-    rows = db.prepare(`
+    rows = getDb().prepare(`
       SELECT * FROM im_direct_messages
       WHERE owner_user_id = ? AND peer_user_id = ? AND created_at < ?
       ORDER BY created_at DESC LIMIT ?
     `).all(ownerUserId, peerUserId, before, limit) as Array<Record<string, unknown>>;
   } else {
-    rows = db.prepare(`
+    rows = getDb().prepare(`
       SELECT * FROM im_direct_messages
       WHERE owner_user_id = ? AND peer_user_id = ?
       ORDER BY created_at DESC LIMIT ?
     `).all(ownerUserId, peerUserId, limit) as Array<Record<string, unknown>>;
   }
-  rows.reverse();
-  return rows.map(rowToMessage);
+  return rows.reverse().map(rowToMessage);
 }
 
 function rowToMessage(row: Record<string, unknown>): ImMessage {
   return {
     localId: row.local_id as string | undefined,
-    messageId: row.message_id as string || '',
+    messageId: (row.message_id as string) || '',
     peerUserId: row.peer_user_id as string,
     fromUser: row.from_user as string,
     toUser: row.to_user as string,
@@ -275,41 +321,72 @@ function rowToMessage(row: Record<string, unknown>): ImMessage {
 }
 
 export function getMessageByLocalId(ownerUserId: string, localId: string): ImMessage | null {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM im_direct_messages WHERE owner_user_id = ? AND local_id = ?')
+  const row = getDb().prepare('SELECT * FROM im_direct_messages WHERE owner_user_id = ? AND local_id = ?')
     .get(ownerUserId, localId) as Record<string, unknown> | undefined;
   return row ? rowToMessage(row) : null;
 }
 
-// ─── 会话 ───
+export function listPendingMessages(ownerUserId: string, limit = 100): ImMessage[] {
+  const rows = getDb().prepare(`
+    SELECT * FROM im_direct_messages
+    WHERE owner_user_id = ? AND direction = 'out' AND status = 'pending'
+    ORDER BY local_created_at ASC LIMIT ?
+  `).all(ownerUserId, limit) as Array<Record<string, unknown>>;
+  return rows.map(rowToMessage);
+}
+
+export function getFriend(ownerUserId: string, peerUserId: string): ImFriend | null {
+  const row = getDb().prepare('SELECT * FROM im_friends WHERE owner_user_id = ? AND friend_id = ?')
+    .get(ownerUserId, peerUserId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    userId: row.friend_id as string,
+    username: row.username as string,
+    displayName: row.display_name as string,
+    avatar: row.avatar as string | null,
+    status: 'accepted',
+    online: Boolean(row.online),
+    lastSeenAt: row.last_seen_at as number | null,
+  };
+}
 
 export function upsertConversation(ownerUserId: string, peerUserId: string, peerUsername: string, peerDisplayName: string, patch: { lastMessagePreview?: string; lastMessageAt?: number; unreadDelta?: number }): void {
   const db = getDb();
   const now = Date.now();
   db.prepare(`
-    INSERT INTO im_conversations (owner_user_id, peer_user_id, peer_username, peer_display_name, last_message_preview, last_message_at, unread_count, updated_at)
+    INSERT INTO im_conversations (
+      owner_user_id, peer_user_id, peer_username, peer_display_name,
+      last_message_preview, last_message_at, unread_count, updated_at
+    )
     VALUES (?, ?, ?, ?, ?, ?, MAX(0, ?), ?)
     ON CONFLICT(owner_user_id, peer_user_id) DO UPDATE SET
-      last_message_preview = COALESCE(?, im_conversations.last_message_preview),
-      last_message_at = COALESCE(?, im_conversations.last_message_at),
+      peer_username = CASE WHEN excluded.peer_username != '' THEN excluded.peer_username ELSE im_conversations.peer_username END,
+      peer_display_name = CASE WHEN excluded.peer_display_name != '' THEN excluded.peer_display_name ELSE im_conversations.peer_display_name END,
+      last_message_preview = COALESCE(excluded.last_message_preview, im_conversations.last_message_preview),
+      last_message_at = COALESCE(excluded.last_message_at, im_conversations.last_message_at),
       unread_count = MAX(0, im_conversations.unread_count + ?),
       updated_at = excluded.updated_at
   `).run(
-    ownerUserId, peerUserId, peerUsername, peerDisplayName,
-    patch.lastMessagePreview || null, patch.lastMessageAt || null, patch.unreadDelta || 0, now,
-    patch.lastMessagePreview || null, patch.lastMessageAt || null, patch.unreadDelta || 0
+    ownerUserId,
+    peerUserId,
+    peerUsername,
+    peerDisplayName,
+    patch.lastMessagePreview || null,
+    patch.lastMessageAt || null,
+    patch.unreadDelta || 0,
+    now,
+    patch.unreadDelta || 0,
   );
 }
 
 export function clearUnread(ownerUserId: string, peerUserId: string): void {
-  const db = getDb();
-  db.prepare('UPDATE im_conversations SET unread_count = 0 WHERE owner_user_id = ? AND peer_user_id = ?')
+  getDb().prepare('UPDATE im_conversations SET unread_count = 0 WHERE owner_user_id = ? AND peer_user_id = ?')
     .run(ownerUserId, peerUserId);
 }
 
 export function listConversations(ownerUserId: string): ImConversation[] {
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM im_conversations WHERE owner_user_id = ? ORDER BY updated_at DESC').all(ownerUserId) as Array<Record<string, unknown>>;
+  const rows = getDb().prepare('SELECT * FROM im_conversations WHERE owner_user_id = ? ORDER BY updated_at DESC')
+    .all(ownerUserId) as Array<Record<string, unknown>>;
   return rows.map((r) => ({
     peerUserId: r.peer_user_id as string,
     peerUsername: r.peer_username as string,
@@ -320,10 +397,7 @@ export function listConversations(ownerUserId: string): ImConversation[] {
   }));
 }
 
-// ─── 更新在线状态 ───
-
 export function updateFriendOnline(ownerUserId: string, friendId: string, online: boolean, lastSeenAt?: number): void {
-  const db = getDb();
-  db.prepare('UPDATE im_friends SET online = ?, last_seen_at = ?, updated_at = ? WHERE owner_user_id = ? AND friend_id = ?')
+  getDb().prepare('UPDATE im_friends SET online = ?, last_seen_at = ?, updated_at = ? WHERE owner_user_id = ? AND friend_id = ?')
     .run(online ? 1 : 0, lastSeenAt || null, Date.now(), ownerUserId, friendId);
 }

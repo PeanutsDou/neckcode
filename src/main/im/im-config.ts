@@ -1,6 +1,6 @@
 // IM 客户端默认配置
 
-export const IM_DEFAULT_SERVER_URL = 'ws://localhost:7654';
+export const IM_DEFAULT_SERVER_URL = 'ws://111.229.84.47/im';
 
 export const IM_RECONNECT_BACKOFF_MS = [1000, 2000, 5000, 10000, 30000];
 

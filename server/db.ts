@@ -1,22 +1,34 @@
-import Database from 'better-sqlite3';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { config } from './config';
 import { logger } from './logger';
 
-let db: Database.Database;
+interface StatementLike {
+  run: (...args: unknown[]) => unknown;
+  get: (...args: unknown[]) => unknown;
+  all: (...args: unknown[]) => unknown[];
+}
 
-export function getDb(): Database.Database {
+interface DbLike {
+  prepare: (sql: string) => StatementLike;
+  exec: (sql: string) => void;
+  pragma: (sql: string) => unknown;
+  transaction: <T extends (...args: never[]) => unknown>(fn: T) => T;
+  close: () => void;
+}
+
+let db: DbLike | null = null;
+
+export function getDb(): DbLike {
   if (!db) throw new Error('Database not initialized');
   return db;
 }
 
 export function initDb(): void {
-  // 确保数据目录存在
   const dir = dirname(config.dbPath);
   mkdirSync(dir, { recursive: true });
 
-  db = new Database(config.dbPath);
+  db = openDatabase(config.dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
@@ -24,8 +36,60 @@ export function initDb(): void {
   logger.info('Database initialized', { path: config.dbPath });
 }
 
+function openDatabase(dbPath: string): DbLike {
+  try {
+    const BetterSqlite3 = require('better-sqlite3');
+    return new BetterSqlite3(dbPath) as DbLike;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('NODE_MODULE_VERSION') && !message.includes('ERR_DLOPEN_FAILED') && !message.includes("Cannot find module 'better-sqlite3'")) {
+      throw err;
+    }
+    logger.warn('better-sqlite3 ABI mismatch, falling back to node:sqlite for IM server', { error: message });
+    return createNodeSqliteDb(dbPath);
+  }
+}
+
+function createNodeSqliteDb(dbPath: string): DbLike {
+  const { DatabaseSync } = require('node:sqlite');
+  const raw = new DatabaseSync(dbPath);
+
+  const exec = (sql: string) => { raw.exec(sql); };
+
+  return {
+    prepare(sql: string): StatementLike {
+      const stmt = raw.prepare(sql);
+      return {
+        run: (...args: unknown[]) => stmt.run(...args),
+        get: (...args: unknown[]) => stmt.get(...args),
+        all: (...args: unknown[]) => stmt.all(...args),
+      };
+    },
+    exec,
+    pragma(sql: string): unknown {
+      return raw.exec(`PRAGMA ${sql}`);
+    },
+    transaction<T extends (...args: never[]) => unknown>(fn: T): T {
+      return ((...args: Parameters<T>) => {
+        exec('BEGIN');
+        try {
+          const result = fn(...args as never[]);
+          exec('COMMIT');
+          return result;
+        } catch (err) {
+          exec('ROLLBACK');
+          throw err;
+        }
+      }) as T;
+    },
+    close(): void {
+      raw.close();
+    },
+  };
+}
+
 function runMigrations(): void {
-  db.exec(`
+  getDb().exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
@@ -79,6 +143,7 @@ function runMigrations(): void {
 export function closeDb(): void {
   if (db) {
     db.close();
+    db = null;
     logger.info('Database closed');
   }
 }

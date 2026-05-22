@@ -7,59 +7,72 @@ import { FriendSearchDialog } from './FriendSearchDialog';
 import { FriendRequests } from './FriendRequests';
 import { DirectChat } from './DirectChat';
 
+async function loadFriends() {
+  const result = await window.electronAPI!.imListFriends();
+  if (result?.friends || result?.requests) {
+    useImStore.getState().setFriends(result.friends || [], result.requests || []);
+  }
+}
+
+async function loadConversations() {
+  const result = await window.electronAPI!.imListConversations();
+  if (result?.conversations) {
+    useImStore.getState().setConversations(result.conversations);
+  }
+}
+
 export function ImShell() {
   const authState = useImStore((s) => s.authState);
   const showSearch = useImStore((s) => s.showSearch);
   const showRequests = useImStore((s) => s.showRequests);
 
-  // ── 订阅主进程事件 ──
-
   useEffect(() => {
-    const unsubs: (() => void)[] = [];
+    const unsubs: Array<() => void> = [];
 
-    // 认证状态
     unsubs.push(window.electronAPI!.onImAuthState((state: any) => {
-      useImStore.getState().setAuthState(state);
-      // 登录成功后加载好友列表和会话
+      const store = useImStore.getState();
+      store.setAuthState(state);
       if (state.status === 'loggedIn') {
-        loadFriends();
-        loadConversations();
+        void loadFriends();
+        void loadConversations();
+      } else {
+        store.setFriends([], []);
+        store.setConversations([]);
+        store.setActivePeer(null);
       }
     }));
 
-    // 连接状态
     unsubs.push(window.electronAPI!.onImConnectionState((state: any) => {
-      useImStore.getState().setConnectionState(state.state);
+      useImStore.getState().setConnectionState(state.state || state);
     }));
 
-    // 好友更新
     unsubs.push(window.electronAPI!.onImFriendsUpdated((data: any) => {
       useImStore.getState().setFriends(data.friends || [], data.requests || []);
+      void loadConversations();
     }));
 
-    // 好友申请
     unsubs.push(window.electronAPI!.onImFriendRequest((data: any) => {
       if (data.request) useImStore.getState().addRequest(data.request);
     }));
 
-    // 新消息
     unsubs.push(window.electronAPI!.onImMessageNew((data: any) => {
       if (data.message) useImStore.getState().addMessage(data.message);
     }));
 
-    // 消息状态更新
     unsubs.push(window.electronAPI!.onImMessageUpdated((data: any) => {
       if (data.localId && data.message) {
         useImStore.getState().updateMessage(data.localId, data.message);
       }
     }));
 
-    // 在线状态
+    unsubs.push(window.electronAPI!.onImConversationUpdated((data: any) => {
+      if (data.conversation) useImStore.getState().updateConversation(data.conversation);
+    }));
+
     unsubs.push(window.electronAPI!.onImPresence((data: any) => {
       useImStore.getState().updatePresence(data.userId, data.online, data.lastSeenAt);
     }));
 
-    // 错误
     unsubs.push(window.electronAPI!.onImError((data: any) => {
       useImStore.getState().setError(data.error || data);
     }));
@@ -67,41 +80,21 @@ export function ImShell() {
     return () => unsubs.forEach((u) => u());
   }, []);
 
-  // ── 初始状态 ──
-
   useEffect(() => {
     window.electronAPI!.imGetAuthState().then((state: any) => {
       useImStore.getState().setAuthState(state);
       if (state.status === 'loggedIn') {
-        loadFriends();
-        loadConversations();
+        void loadFriends();
+        void loadConversations();
       }
+    }).catch((err: unknown) => {
+      useImStore.getState().setError({ code: 'AUTH_STATE_FAILED', message: String(err), source: 'client', retryable: true });
     });
   }, []);
 
-  const loadFriends = async () => {
-    try {
-      const result = await window.electronAPI!.imListFriends();
-      if (result.friends || result.requests) {
-        useImStore.getState().setFriends(result.friends || [], result.requests || []);
-      }
-    } catch { /* ignore */ }
-  };
-
-  const loadConversations = async () => {
-    try {
-      const result = await window.electronAPI!.imListConversations();
-      if (result.conversations) {
-        useImStore.getState().setConversations(result.conversations);
-      }
-    } catch { /* ignore */ }
-  };
-
-  // ── 渲染 ──
-
   if (authState.status === 'loggedOut') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-primary)' }}>
         <ConnectionBanner />
         <LoginPage />
       </div>
@@ -109,17 +102,14 @@ export function ImShell() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-primary)' }}>
       <ConnectionBanner />
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* 好友面板 */}
-        <div style={{ width: 240, flexShrink: 0, position: 'relative' }}>
+        <div style={{ width: 252, flexShrink: 0, position: 'relative' }}>
           <FriendList />
           {showSearch && <FriendSearchDialog />}
           {showRequests && <FriendRequests />}
         </div>
-
-        {/* 聊天面板 */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <DirectChat />
         </div>

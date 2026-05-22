@@ -1,66 +1,78 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useImStore } from '../../stores/im-store';
 import type { ImMessage } from '../../../shared/im-types';
 
+const EMPTY_MESSAGES: ImMessage[] = [];
+
+function formatTime(ts: number): string {
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function statusText(status: ImMessage['status']): string {
+  if (status === 'pending') return '发送中';
+  if (status === 'failed') return '发送失败';
+  if (status === 'read') return '已读';
+  if (status === 'delivered') return '已送达';
+  return '已发送';
+}
+
 export function MessageList({ peerId }: { peerId: string }) {
-  const messages = useImStore((s) => s.messages[peerId] || []);
-  const currentUserId = useImStore((s) => s.authState.user?.userId);
+  const [loading, setLoading] = useState(false);
+  const messages = useImStore((s) => s.messages[peerId] ?? EMPTY_MESSAGES);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [messages.length, peerId]);
 
-  // 加载历史
   useEffect(() => {
-    window.electronAPI!.imListMessages(peerId).then((result: any) => {
-      if (result.messages) {
+    let disposed = false;
+    setLoading(true);
+
+    window.electronAPI!.imListMessages(peerId, { limit: 80 }).then((result: any) => {
+      if (!disposed && result.messages) {
         useImStore.getState().setMessages(peerId, result.messages);
       }
+      return window.electronAPI!.imLoadHistory(peerId, { limit: 80 });
+    }).then((result: any) => {
+      if (!disposed && result?.messages) {
+        useImStore.getState().setMessages(peerId, result.messages);
+      }
+    }).catch((err: unknown) => {
+      if (!disposed) {
+        useImStore.getState().setError({ code: 'LOAD_HISTORY_FAILED', message: String(err), source: 'client', retryable: true });
+      }
+    }).finally(() => {
+      if (!disposed) setLoading(false);
     });
-    // 也拉服务端历史
-    window.electronAPI!.imLoadHistory(peerId, { limit: 30 }).catch(() => {});
+
+    return () => { disposed = true; };
   }, [peerId]);
 
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
-      {messages.length === 0 && (
-        <div style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', paddingTop: 40 }}>
-          暂无消息，发送第一条消息吧
-        </div>
+    <div style={containerStyle}>
+      {loading && <div style={loadingStyle}>正在同步消息...</div>}
+      {messages.length === 0 && !loading && (
+        <div style={emptyStyle}>暂无消息，发送第一条消息开始对话。</div>
       )}
       {messages.map((msg, i) => {
         const isOut = msg.direction === 'out';
-        const showStatus = isOut;
         return (
-          <div key={msg.localId || msg.messageId || i} style={{
-            display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', marginBottom: 8,
-          }}>
-            <div style={{
-              maxWidth: '70%', padding: '8px 12px', borderRadius: 12,
-              background: isOut ? 'var(--accent)' : 'var(--bg-surface)',
-              color: isOut ? '#fff' : 'var(--text-primary)', fontSize: 13,
-              borderBottomRightRadius: isOut ? 4 : 12,
-              borderBottomLeftRadius: isOut ? 12 : 4,
-              wordBreak: 'break-word',
-            }}>
-              <div>{msg.content}</div>
-              {showStatus && (
-                <div style={{ fontSize: 10, marginTop: 4, opacity: 0.7, textAlign: 'right' }}>
-                  {msg.status === 'pending' && '发送中...'}
-                  {msg.status === 'sent' && '✓'}
-                  {msg.status === 'delivered' && '✓✓'}
-                  {msg.status === 'read' && '✓✓'}
-                  {msg.status === 'failed' && '❌ 重试'}
-                  {msg.status === 'failed' && (
-                    <span style={{ cursor: 'pointer', marginLeft: 4, textDecoration: 'underline' }}
-                      onClick={() => {
-                        window.electronAPI!.imSendMessage({ toUser: peerId, content: msg.content });
-                      }}
-                    >重试</span>
-                  )}
-                </div>
-              )}
+          <div key={msg.localId || msg.messageId || i} style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', marginBottom: 10 }}>
+            <div style={{ ...bubbleStyle, ...(isOut ? outBubbleStyle : inBubbleStyle) }}>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+              <div style={{ ...metaStyle, color: isOut ? 'rgba(255,255,255,0.78)' : 'var(--text-muted)' }}>
+                <span>{formatTime(msg.createdAt)}</span>
+                {isOut && <span>{statusText(msg.status)}</span>}
+                {msg.status === 'failed' && (
+                  <button
+                    onClick={() => window.electronAPI!.imSendMessage({ toUser: peerId, content: msg.content })}
+                    style={retryStyle}
+                  >
+                    重试
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -69,3 +81,66 @@ export function MessageList({ peerId }: { peerId: string }) {
     </div>
   );
 }
+
+const containerStyle: React.CSSProperties = {
+  flex: 1,
+  overflow: 'auto',
+  padding: '14px 18px',
+  background: 'var(--bg-primary)',
+};
+
+const loadingStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: 11,
+  textAlign: 'center',
+  marginBottom: 12,
+};
+
+const emptyStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: 12,
+  textAlign: 'center',
+  paddingTop: 42,
+};
+
+const bubbleStyle: React.CSSProperties = {
+  maxWidth: '72%',
+  padding: '8px 11px',
+  borderRadius: 13,
+  fontSize: 13,
+  lineHeight: 1.6,
+  wordBreak: 'break-word',
+  border: '1px solid var(--border)',
+};
+
+const outBubbleStyle: React.CSSProperties = {
+  background: 'var(--accent)',
+  color: '#fff',
+  borderColor: 'var(--accent)',
+  borderBottomRightRadius: 5,
+};
+
+const inBubbleStyle: React.CSSProperties = {
+  background: 'var(--bg-surface)',
+  color: 'var(--text-primary)',
+  borderBottomLeftRadius: 5,
+};
+
+const metaStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  alignItems: 'center',
+  gap: 7,
+  fontSize: 10,
+  marginTop: 4,
+};
+
+const retryStyle: React.CSSProperties = {
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  textDecoration: 'underline',
+  cursor: 'pointer',
+  fontSize: 10,
+};

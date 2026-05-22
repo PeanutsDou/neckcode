@@ -4,39 +4,173 @@ import { ImClient } from './im-client';
 import * as imStore from './im-store';
 import { normalizeError, badRequestError, cacheError } from './im-errors';
 import type {
-  ImAuthState, ImFriend, ImFriendRequest, ImMessage, ImConversation,
-  ImSendMessageInput, ImSendMessageResult, ImClientError,
+  ImAuthState,
+  ImFriend,
+  ImFriendRequest,
+  ImMessage,
+  ImConversation,
+  ImSendMessageInput,
+  ImSendMessageResult,
 } from '../../shared/im-types';
 
 let imClient: ImClient | null = null;
 let mainWindow: BrowserWindow | null = null;
 let handlersRegistered = false;
+let flushingPending = false;
 
 function getClient(): ImClient {
   if (!imClient) throw new Error('IM client not initialized');
   return imClient;
 }
 
-// ─── Renderer 事件发送 ───
-
 function sendToRenderer(channel: string, data: unknown): void {
   try {
     mainWindow?.webContents.send(channel, data);
-  } catch { /* window may be closed */ }
+  } catch {
+    /* window may be closed */
+  }
 }
-
-// ─── 加载本地缓存状态 ───
 
 function loadLocalState(): { friends: ImFriend[]; requests: ImFriendRequest[]; conversations: ImConversation[] } | null {
   const user = imStore.getLocalUser();
   if (!user) return null;
-  const friends = imStore.listCachedFriends(user.userId);
-  const requests = imStore.listFriendRequests(user.userId);
-  const conversations = imStore.listConversations(user.userId);
-  return { friends, requests, conversations };
+  return {
+    friends: imStore.listCachedFriends(user.userId),
+    requests: imStore.listFriendRequests(user.userId),
+    conversations: imStore.listConversations(user.userId),
+  };
 }
 
-// ─── 事件监听绑定 ───
+function normalizeFriend(row: Record<string, unknown>): ImFriend {
+  return {
+    userId: String(row.userId || ''),
+    username: String(row.username || ''),
+    displayName: String(row.displayName || row.username || ''),
+    avatar: (row.avatar as string | null) || null,
+    status: 'accepted',
+    online: Boolean(row.online),
+    lastSeenAt: typeof row.lastSeenAt === 'number' ? row.lastSeenAt : null,
+  };
+}
+
+function normalizeRequest(row: Record<string, unknown>, direction: 'in' | 'out' = 'in'): ImFriendRequest {
+  return {
+    userId: String(row.userId || ''),
+    username: String(row.username || ''),
+    displayName: String(row.displayName || row.username || ''),
+    avatar: (row.avatar as string | null) || null,
+    direction,
+    status: 'pending',
+    createdAt: typeof row.createdAt === 'number' ? row.createdAt : Math.floor(Date.now() / 1000),
+  };
+}
+
+function cacheFriendList(ownerUserId: string, result: Record<string, unknown>): { friends: ImFriend[]; requests: ImFriendRequest[] } {
+  const friends = Array.isArray(result.friends)
+    ? (result.friends as Array<Record<string, unknown>>).map(normalizeFriend).filter((f) => f.userId)
+    : [];
+  const requests = Array.isArray(result.requests)
+    ? (result.requests as Array<Record<string, unknown>>).map((r) => normalizeRequest(r, 'in')).filter((r) => r.userId)
+    : [];
+
+  imStore.upsertFriends(ownerUserId, friends);
+  imStore.replaceFriendRequests(ownerUserId, requests);
+  return { friends: imStore.listCachedFriends(ownerUserId), requests: imStore.listFriendRequests(ownerUserId) };
+}
+
+function conversationFor(ownerUserId: string, peerUserId: string): ImConversation | null {
+  return imStore.listConversations(ownerUserId).find((c) => c.peerUserId === peerUserId) || null;
+}
+
+function emitLocalState(): void {
+  const state = loadLocalState();
+  if (!state) return;
+  sendToRenderer('im:friends-updated', { friends: state.friends, requests: state.requests });
+  for (const conversation of state.conversations) {
+    sendToRenderer('im:conversation-updated', { conversation });
+  }
+}
+
+function messagePayloadToLocal(ownerUserId: string, msg: Record<string, unknown>): ImMessage {
+  const fromUser = String(msg.fromUser || '');
+  const toUser = String(msg.toUser || '');
+  const peerUserId = fromUser === ownerUserId ? toUser : fromUser;
+  return {
+    localId: `svr:${String(msg.messageId || '')}`,
+    messageId: String(msg.messageId || ''),
+    peerUserId,
+    fromUser,
+    toUser,
+    direction: fromUser === ownerUserId ? 'out' : 'in',
+    content: String(msg.content || ''),
+    msgType: String(msg.msgType || 'text'),
+    status: 'sent',
+    createdAt: Number(msg.createdAt || Math.floor(Date.now() / 1000)),
+    deliveredAt: typeof msg.deliveredAt === 'number' ? msg.deliveredAt : null,
+    readAt: typeof msg.readAt === 'number' ? msg.readAt : null,
+  };
+}
+
+function cacheServerMessage(ownerUserId: string, msg: Record<string, unknown>, unreadDelta: number): ImMessage {
+  const localMessage = messagePayloadToLocal(ownerUserId, msg);
+  const inserted = imStore.insertIncomingMessage(ownerUserId, {
+    messageId: localMessage.messageId,
+    fromUser: localMessage.fromUser,
+    toUser: localMessage.toUser,
+    content: localMessage.content,
+    msgType: localMessage.msgType,
+    createdAt: localMessage.createdAt,
+    deliveredAt: localMessage.deliveredAt,
+    readAt: localMessage.readAt,
+  });
+  const friend = imStore.getFriend(ownerUserId, localMessage.peerUserId);
+  imStore.upsertConversation(ownerUserId, localMessage.peerUserId, friend?.username || '', friend?.displayName || '', {
+    lastMessagePreview: localMessage.content.slice(0, 50),
+    lastMessageAt: localMessage.createdAt,
+    unreadDelta: inserted ? unreadDelta : 0,
+  });
+  return localMessage;
+}
+
+async function sendPendingMessage(client: ImClient, ownerUserId: string, message: ImMessage): Promise<void> {
+  if (!message.localId || client.getState() !== 'online') return;
+  const result = await client.sendRequest('msg.send', {
+    toUser: message.toUser,
+    content: message.content,
+    msgType: 'text',
+  }, { localMessageId: message.localId }) as Record<string, unknown>;
+
+  imStore.markMessageSent(ownerUserId, message.localId, String(result.messageId || ''), Number(result.createdAt || message.createdAt));
+  const updated = imStore.getMessageByLocalId(ownerUserId, message.localId);
+  if (updated) {
+    sendToRenderer('im:message-updated', { localId: message.localId, message: updated });
+  }
+  const conv = conversationFor(ownerUserId, message.peerUserId);
+  if (conv) sendToRenderer('im:conversation-updated', { conversation: conv });
+}
+
+async function flushPendingMessages(client: ImClient, ownerUserId: string): Promise<void> {
+  if (flushingPending || client.getState() !== 'online') return;
+  flushingPending = true;
+  try {
+    const pending = imStore.listPendingMessages(ownerUserId);
+    for (const message of pending) {
+      try {
+        await sendPendingMessage(client, ownerUserId, message);
+      } catch (err) {
+        const error = normalizeError(err);
+        if (!error.retryable && message.localId) {
+          imStore.markMessageFailed(ownerUserId, message.localId);
+          const failed = imStore.getMessageByLocalId(ownerUserId, message.localId);
+          if (failed) sendToRenderer('im:message-updated', { localId: message.localId, message: failed });
+        }
+        if (error.retryable) break;
+      }
+    }
+  } finally {
+    flushingPending = false;
+  }
+}
 
 function bindClientEvents(client: ImClient): void {
   client.onEvent((type, payload) => {
@@ -44,17 +178,14 @@ function bindClientEvents(client: ImClient): void {
     const userId = client.getUserId();
 
     switch (type) {
-      // 连接状态
       case 'connection-state':
         sendToRenderer('im:connection-state', payload);
         break;
 
-      // 认证状态
       case 'auth-state': {
         const authState = payload as unknown as ImAuthState;
         if (authState.status === 'loggedIn' && authState.user && userId) {
           try {
-            // 保存 token 到本地
             const token = client.getCurrentToken();
             if (token) {
               const now = Math.floor(Date.now() / 1000);
@@ -64,34 +195,27 @@ function bindClientEvents(client: ImClient): void {
                 displayName: authState.user.displayName,
                 avatar: authState.user.avatar,
                 token,
-                tokenExpiresAt: now + 30 * 24 * 3600, // 30 days
-                serverUrl: '', // TODO: get actual server URL
+                tokenExpiresAt: now + 30 * 24 * 3600,
+                serverUrl: client.getServerUrl(),
               });
             }
           } catch (err) {
             sendToRenderer('im:error', { error: cacheError(String(err)) });
           }
+          void flushPendingMessages(client, userId);
         }
         sendToRenderer('im:auth-state', payload);
         break;
       }
 
-      // ─── 好友 ───
       case 'friend.add_notify': {
         const fromUser = p.fromUser as Record<string, unknown>;
-        const request: ImFriendRequest = {
-          userId: fromUser.userId as string,
-          username: fromUser.username as string,
-          displayName: fromUser.displayName as string,
-          avatar: fromUser.avatar as string | null,
-          direction: 'in',
-          status: 'pending',
-          createdAt: Math.floor(Date.now() / 1000),
-        };
+        const request = normalizeRequest(fromUser, 'in');
         if (userId) {
           try { imStore.upsertFriendRequest(userId, request); } catch { /* cache error */ }
         }
         sendToRenderer('im:friend-request', { request });
+        emitLocalState();
         break;
       }
 
@@ -99,110 +223,55 @@ function bindClientEvents(client: ImClient): void {
         const fromUser = p.fromUser as Record<string, unknown>;
         if (userId) {
           try {
-            imStore.upsertFriends(userId, [{
-              userId: fromUser.userId as string,
-              username: fromUser.username as string,
-              displayName: fromUser.displayName as string,
-              avatar: fromUser.avatar as string | null,
-              status: 'accepted',
-              online: false,
-              lastSeenAt: null,
-            }]);
+            imStore.upsertFriends(userId, [normalizeFriend({ ...fromUser, status: 'accepted', online: false })]);
           } catch { /* cache error */ }
         }
-        sendToRenderer('im:friends-updated', loadLocalState() || { friends: [], requests: [] });
+        emitLocalState();
         break;
       }
 
-      // ─── 消息 ───
-      case 'msg.new': {
-        const msg = p as Record<string, unknown>;
-        const peerUserId = (msg.fromUser === userId ? msg.toUser : msg.fromUser) as string;
-        if (userId) {
-          try {
-            const inserted = imStore.insertIncomingMessage(userId, {
-              messageId: msg.messageId as string,
-              fromUser: msg.fromUser as string,
-              toUser: msg.toUser as string,
-              content: msg.content as string,
-              msgType: msg.msgType as string,
-              createdAt: msg.createdAt as number,
-            });
-            if (inserted) {
-              imStore.upsertConversation(userId, peerUserId, '', '', {
-                lastMessagePreview: (msg.content as string).slice(0, 50),
-                lastMessageAt: msg.createdAt as number,
-                unreadDelta: 1,
-              });
-            }
-          } catch { /* cache error */ }
+      case 'friend.remove_notify': {
+        const removedUserId = String(p.userId || '');
+        if (userId && removedUserId) {
+          try { imStore.removeFriend(userId, removedUserId); } catch { /* cache error */ }
         }
-        sendToRenderer('im:message-new', {
-          message: {
-            messageId: msg.messageId,
-            peerUserId,
-            fromUser: msg.fromUser,
-            toUser: msg.toUser,
-            direction: msg.fromUser === userId ? 'out' : 'in',
-            content: msg.content,
-            msgType: msg.msgType,
-            status: 'sent',
-            createdAt: msg.createdAt,
-            deliveredAt: null,
-            readAt: null,
-          },
-        });
+        emitLocalState();
+        break;
+      }
+
+      case 'msg.new': {
+        if (!userId) break;
+        const msg = p as Record<string, unknown>;
+        const localMessage = cacheServerMessage(userId, msg, 1);
+        sendToRenderer('im:message-new', { message: localMessage });
+        const conv = conversationFor(userId, localMessage.peerUserId);
+        if (conv) sendToRenderer('im:conversation-updated', { conversation: conv });
         break;
       }
 
       case 'sys.offline_msgs': {
-        const messages = p.messages as Array<Record<string, unknown>>;
-        if (userId && messages) {
-          for (const msg of messages) {
-            try {
-              const peerUserId = (msg.fromUser === userId ? msg.toUser : msg.fromUser) as string;
-              imStore.insertIncomingMessage(userId, {
-                messageId: msg.messageId as string,
-                fromUser: msg.fromUser as string,
-                toUser: msg.toUser as string,
-                content: msg.content as string,
-                msgType: msg.msgType as string,
-                createdAt: msg.createdAt as number,
-              });
-              imStore.upsertConversation(userId, peerUserId, '', '', {
-                lastMessagePreview: (msg.content as string).slice(0, 50),
-                lastMessageAt: msg.createdAt as number,
-                unreadDelta: 1,
-              });
-            } catch { /* cache error */ }
-          }
-          sendToRenderer('im:friends-updated', loadLocalState() || { friends: [], requests: [] });
+        if (!userId || !Array.isArray(p.messages)) break;
+        for (const msg of p.messages as Array<Record<string, unknown>>) {
+          const localMessage = cacheServerMessage(userId, msg, 1);
+          sendToRenderer('im:message-new', { message: localMessage });
+          const conv = conversationFor(userId, localMessage.peerUserId);
+          if (conv) sendToRenderer('im:conversation-updated', { conversation: conv });
         }
+        emitLocalState();
         break;
       }
 
-      // ─── 在线状态 ───
-      case 'presence.online': {
-        if (userId) {
-          try {
-            imStore.updateFriendOnline(userId, p.userId as string, true);
-          } catch { /* cache error */ }
-        }
-        sendToRenderer('im:presence', { userId: p.userId, online: true });
-        break;
-      }
-
+      case 'presence.online':
       case 'presence.offline': {
-        if (userId) {
-          try {
-            imStore.updateFriendOnline(userId, p.userId as string, false, p.lastSeenAt as number);
-          } catch { /* cache error */ }
+        const online = type === 'presence.online';
+        const peerUserId = String(p.userId || '');
+        if (userId && peerUserId) {
+          try { imStore.updateFriendOnline(userId, peerUserId, online, p.lastSeenAt as number | undefined); } catch { /* cache error */ }
         }
-        sendToRenderer('im:presence', { userId: p.userId, online: false, lastSeenAt: p.lastSeenAt });
+        sendToRenderer('im:presence', { userId: peerUserId, online, lastSeenAt: p.lastSeenAt });
         break;
       }
 
-      // 错误
       case 'error':
         sendToRenderer('im:error', payload);
         break;
@@ -210,12 +279,8 @@ function bindClientEvents(client: ImClient): void {
   });
 }
 
-// ─── IPC Handlers ───
-
 export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   mainWindow = win || mainWindow;
-
-  // 只注册一次 IPC handlers
   if (handlersRegistered) return;
   handlersRegistered = true;
 
@@ -223,15 +288,10 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   imStore.initImStore();
   bindClientEvents(imClient);
 
-  // ── 连接 ──
   ipcMain.handle('im:connect', async (_event, serverUrl?: string) => {
     try {
-      imClient = imClient || new ImClient();
-      if (!imClient || imClient === null) {
-        imClient = new ImClient();
-        bindClientEvents(imClient);
-      }
-      imClient.connect(serverUrl);
+      const client = getClient();
+      await client.connectAndWait(serverUrl);
       return { ok: true };
     } catch (err) {
       return { error: normalizeError(err) };
@@ -241,15 +301,14 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   ipcMain.handle('im:disconnect', async () => {
     getClient().disconnect();
     imStore.clearLocalUser();
+    sendToRenderer('im:auth-state', { status: 'loggedOut', user: null });
     return { ok: true };
   });
 
-  // ── 认证 ──
   ipcMain.handle('im:get-auth-state', async () => {
     const localUser = imStore.getLocalUser();
-    if (!localUser) {
-      return { status: 'loggedOut', user: null } as ImAuthState;
-    }
+    if (!localUser) return { status: 'loggedOut', user: null } as ImAuthState;
+
     const client = getClient();
     if (client.getState() === 'online' && client.getUserId()) {
       return {
@@ -257,30 +316,26 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
         user: { userId: client.getUserId()!, username: localUser.username, displayName: localUser.displayName, avatar: localUser.avatar },
       } as ImAuthState;
     }
-    // 尝试 token 自动登录
+
     try {
-      if (!imClient) {
-        imClient = new ImClient();
-        bindClientEvents(imClient);
-      }
-      imClient.connect(localUser.serverUrl || undefined);
-      await imClient.loginWithToken(localUser.token);
-      return { status: 'loggedIn', user: { userId: localUser.userId, username: localUser.username, displayName: localUser.displayName, avatar: localUser.avatar } } as ImAuthState;
-    } catch {
+      await client.connectAndWait(localUser.serverUrl || undefined);
+      await client.loginWithToken(localUser.token);
+      return {
+        status: 'loggedIn',
+        user: { userId: localUser.userId, username: localUser.username, displayName: localUser.displayName, avatar: localUser.avatar },
+      } as ImAuthState;
+    } catch (err) {
+      sendToRenderer('im:error', { error: normalizeError(err) });
       return { status: 'loggedOut', user: null } as ImAuthState;
     }
   });
 
   ipcMain.handle('im:register', async (_event, input: { username: string; password: string; displayName: string }) => {
     try {
-      if (!input.username || !input.password || !input.displayName) throw badRequestError('缺少必填字段');
+      if (!input.username || !input.password || !input.displayName) throw badRequestError('请填写用户名、密码和显示名称');
       const client = getClient();
-      if (client.getState() !== 'online' && client.getState() !== 'connecting') {
-        client.connect();
-        await new Promise(r => setTimeout(r, 500));
-      }
-      const result = await client.register(input);
-      return result;
+      await client.connectAndWait();
+      return await client.register(input);
     } catch (err) {
       return { error: normalizeError(err) };
     }
@@ -288,14 +343,10 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
 
   ipcMain.handle('im:login', async (_event, input: { username: string; password: string }) => {
     try {
-      if (!input.username || !input.password) throw badRequestError('缺少用户名或密码');
+      if (!input.username || !input.password) throw badRequestError('请填写用户名和密码');
       const client = getClient();
-      if (client.getState() !== 'online' && client.getState() !== 'connecting') {
-        client.connect();
-        await new Promise(r => setTimeout(r, 500));
-      }
-      const result = await client.login(input);
-      return result;
+      await client.connectAndWait();
+      return await client.login(input);
     } catch (err) {
       return { error: normalizeError(err) };
     }
@@ -304,15 +355,14 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   ipcMain.handle('im:logout', async () => {
     getClient().disconnect();
     imStore.clearLocalUser();
+    sendToRenderer('im:auth-state', { status: 'loggedOut', user: null });
     return { ok: true };
   });
 
-  // ── 好友 ──
   ipcMain.handle('im:search-users', async (_event, query: string) => {
     try {
       if (!query || query.trim().length === 0) throw badRequestError('搜索内容不能为空');
-      const result = await getClient().sendRequest('friend.search', { query: query.trim() });
-      return result;
+      return await getClient().sendRequest('friend.search', { query: query.trim() });
     } catch (err) {
       return { error: normalizeError(err) };
     }
@@ -321,13 +371,14 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   ipcMain.handle('im:list-friends', async () => {
     try {
       const client = getClient();
-      if (client.getState() !== 'online') {
-        // 离线时返回本地缓存
+      const localUser = imStore.getLocalUser();
+      if (!localUser || client.getState() !== 'online') {
         const local = loadLocalState();
         return { friends: local?.friends || [], requests: local?.requests || [] };
       }
-      const result = await client.sendRequest('friend.list', {});
-      return result;
+      const result = await client.sendRequest('friend.list', {}) as Record<string, unknown>;
+      const cached = cacheFriendList(localUser.userId, result);
+      return cached;
     } catch (err) {
       const local = loadLocalState();
       return { friends: local?.friends || [], requests: local?.requests || [], error: normalizeError(err) };
@@ -337,7 +388,15 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   ipcMain.handle('im:add-friend', async (_event, userId: string) => {
     try {
       if (!userId) throw badRequestError('缺少 userId');
-      const result = await getClient().sendRequest('friend.add', { userId });
+      const result = await getClient().sendRequest('friend.add', { userId }) as Record<string, unknown>;
+      const localUser = imStore.getLocalUser();
+      if (localUser && result.status === 'pending_sent') {
+        imStore.upsertFriendRequest(localUser.userId, normalizeRequest(result, 'out'));
+        emitLocalState();
+      } else if (localUser && result.status === 'accepted') {
+        imStore.upsertFriends(localUser.userId, [normalizeFriend(result)]);
+        emitLocalState();
+      }
       return result;
     } catch (err) {
       return { error: normalizeError(err) };
@@ -347,104 +406,95 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   ipcMain.handle('im:accept-friend', async (_event, userId: string) => {
     try {
       if (!userId) throw badRequestError('缺少 userId');
-      const result = await getClient().sendRequest('friend.accept', { userId });
+      const result = await getClient().sendRequest('friend.accept', { userId }) as Record<string, unknown>;
+      const localUser = imStore.getLocalUser();
+      const friendPayload = result.friend as Record<string, unknown> | undefined;
+      if (localUser && friendPayload) {
+        imStore.upsertFriends(localUser.userId, [normalizeFriend(friendPayload)]);
+        imStore.removeFriendRequest(localUser.userId, userId);
+        emitLocalState();
+      }
       return result;
     } catch (err) {
       return { error: normalizeError(err) };
     }
   });
 
-  // ── 消息 ──
+  ipcMain.handle('im:remove-friend', async (_event, userId: string) => {
+    try {
+      if (!userId) throw badRequestError('缺少 userId');
+      const result = await getClient().sendRequest('friend.remove', { userId }) as Record<string, unknown>;
+      const localUser = imStore.getLocalUser();
+      if (localUser) {
+        imStore.removeFriend(localUser.userId, userId);
+        emitLocalState();
+      }
+      return result;
+    } catch (err) {
+      return { error: normalizeError(err) };
+    }
+  });
+
   ipcMain.handle('im:send-message', async (_event, input: ImSendMessageInput) => {
     try {
-      if (!input.toUser) throw badRequestError('缺少 toUser');
+      if (!input.toUser) throw badRequestError('缺少接收人');
       if (!input.content || input.content.trim().length === 0) throw badRequestError('消息不能为空');
       if (input.content.length > 4000) throw badRequestError('消息过长');
 
       const client = getClient();
-      const userId = client.getUserId();
+      const localUser = imStore.getLocalUser();
+      const userId = client.getUserId() || localUser?.userId;
       if (!userId) throw badRequestError('未登录');
 
       const localId = randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      const friend = imStore.getFriend(userId, input.toUser);
 
-      // 乐观写入本地
       try {
         imStore.insertPendingMessage(userId, localId, input.toUser, userId, input.toUser, input.content);
-        imStore.upsertConversation(userId, input.toUser, '', '', {
+        imStore.upsertConversation(userId, input.toUser, friend?.username || '', friend?.displayName || '', {
           lastMessagePreview: input.content.slice(0, 50),
-          lastMessageAt: Math.floor(Date.now() / 1000),
+          lastMessageAt: now,
           unreadDelta: 0,
         });
       } catch { /* cache error */ }
 
-      // 通知 Renderer pending 消息
-      sendToRenderer('im:message-new', {
-        message: {
-          localId,
-          messageId: '',
-          peerUserId: input.toUser,
-          fromUser: userId,
-          toUser: input.toUser,
-          direction: 'out',
-          content: input.content,
-          msgType: 'text',
-          status: 'pending',
-          createdAt: Math.floor(Date.now() / 1000),
-          deliveredAt: null,
-          readAt: null,
-        },
-      });
+      const pendingMessage: ImMessage = {
+        localId,
+        messageId: '',
+        peerUserId: input.toUser,
+        fromUser: userId,
+        toUser: input.toUser,
+        direction: 'out',
+        content: input.content,
+        msgType: 'text',
+        status: 'pending',
+        createdAt: now,
+        deliveredAt: null,
+        readAt: null,
+      };
+      sendToRenderer('im:message-new', { message: pendingMessage });
+      const pendingConv = conversationFor(userId, input.toUser);
+      if (pendingConv) sendToRenderer('im:conversation-updated', { conversation: pendingConv });
 
-      // 发送
+      if (client.getState() !== 'online') {
+        return { localId, status: 'pending' } as ImSendMessageResult;
+      }
+
       try {
-        const result = await client.sendRequest('msg.send', {
-          toUser: input.toUser,
-          content: input.content,
-          msgType: 'text',
-        }, { localMessageId: localId });
+        await sendPendingMessage(client, userId, pendingMessage);
+        const sentMessage = imStore.getMessageByLocalId(userId, localId);
+        const result = sentMessage ? { messageId: sentMessage.messageId, createdAt: sentMessage.createdAt } : {};
 
-        const p = result as Record<string, unknown>;
-        imStore.markMessageSent(userId, localId, p.messageId as string, p.createdAt as number);
-
-        sendToRenderer('im:message-updated', {
-          localId,
-          message: {
-            localId,
-            messageId: p.messageId,
-            peerUserId: input.toUser,
-            fromUser: userId,
-            toUser: input.toUser,
-            direction: 'out',
-            content: input.content,
-            msgType: 'text',
-            status: 'sent',
-            createdAt: p.createdAt,
-            deliveredAt: null,
-            readAt: null,
-          },
-        });
-
-        return { localId, messageId: p.messageId, status: 'sent' } as ImSendMessageResult;
+        return { localId, messageId: result.messageId, createdAt: result.createdAt, status: 'sent' } as ImSendMessageResult;
       } catch (err) {
-        imStore.markMessageFailed(userId, localId);
         const error = normalizeError(err);
-        sendToRenderer('im:message-updated', {
-          localId,
-          message: {
-            localId,
-            messageId: '',
-            peerUserId: input.toUser,
-            fromUser: userId,
-            toUser: input.toUser,
-            direction: 'out',
-            content: input.content,
-            msgType: 'text',
-            status: 'failed',
-            createdAt: Math.floor(Date.now() / 1000),
-            deliveredAt: null,
-            readAt: null,
-          },
-        });
+        if (error.retryable) {
+          return { localId, status: 'pending', error } as ImSendMessageResult;
+        }
+        imStore.markMessageFailed(userId, localId);
+        const failedMessage = imStore.getMessageByLocalId(userId, localId) || { ...pendingMessage, status: 'failed' as const };
+        sendToRenderer('im:message-updated', { localId, message: failedMessage });
         return { localId, status: 'failed', error } as ImSendMessageResult;
       }
     } catch (err) {
@@ -456,8 +506,7 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
     try {
       const user = imStore.getLocalUser();
       if (!user) return { messages: [] };
-      const messages = imStore.listMessages(user.userId, peerUserId, options?.limit || 50, options?.before);
-      return { messages };
+      return { messages: imStore.listMessages(user.userId, peerUserId, options?.limit || 50, options?.before) };
     } catch (err) {
       return { messages: [], error: normalizeError(err) };
     }
@@ -465,12 +514,16 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
 
   ipcMain.handle('im:load-history', async (_event, peerUserId: string, options?: { before?: number; limit?: number }) => {
     try {
+      const user = imStore.getLocalUser();
+      if (!user) return { messages: [] };
       const result = await getClient().sendRequest('msg.history', {
         peerUser: peerUserId,
         before: options?.before,
         limit: options?.limit || 30,
-      });
-      return result;
+      }) as Record<string, unknown>;
+      const messages = Array.isArray(result.messages) ? result.messages as Array<Record<string, unknown>> : [];
+      for (const msg of messages) cacheServerMessage(user.userId, msg, 0);
+      return { messages: imStore.listMessages(user.userId, peerUserId, options?.limit || 50, options?.before) };
     } catch (err) {
       return { error: normalizeError(err) };
     }
@@ -478,20 +531,17 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
 
   ipcMain.handle('im:mark-read', async (_event, messageId: string) => {
     try {
-      const result = await getClient().sendRequest('msg.read', { messageId });
-      return result;
+      return await getClient().sendRequest('msg.read', { messageId });
     } catch (err) {
       return { error: normalizeError(err) };
     }
   });
 
-  // ── 会话 ──
   ipcMain.handle('im:list-conversations', async () => {
     try {
       const user = imStore.getLocalUser();
       if (!user) return { conversations: [] };
-      const conversations = imStore.listConversations(user.userId);
-      return { conversations };
+      return { conversations: imStore.listConversations(user.userId) };
     } catch (err) {
       return { conversations: [], error: normalizeError(err) };
     }
@@ -500,16 +550,14 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   ipcMain.handle('im:clear-unread', async (_event, peerUserId: string) => {
     try {
       const user = imStore.getLocalUser();
-      if (user) imStore.clearUnread(user.userId, peerUserId);
+      if (user) {
+        imStore.clearUnread(user.userId, peerUserId);
+        const conv = conversationFor(user.userId, peerUserId);
+        if (conv) sendToRenderer('im:conversation-updated', { conversation: conv });
+      }
       return { ok: true };
     } catch (err) {
       return { error: normalizeError(err) };
     }
   });
-
-  // 启动时尝试自动连接
-  const localUser = imStore.getLocalUser();
-  if (localUser && imClient) {
-    imClient.connect(localUser.serverUrl || undefined);
-  }
 }

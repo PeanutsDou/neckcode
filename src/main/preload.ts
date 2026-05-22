@@ -166,6 +166,7 @@ const api = {
   imListFriends: () => ipcRenderer.invoke('im:list-friends'),
   imAddFriend: (userId: any) => ipcRenderer.invoke('im:add-friend', userId),
   imAcceptFriend: (userId: any) => ipcRenderer.invoke('im:accept-friend', userId),
+  imRemoveFriend: (userId: any) => ipcRenderer.invoke('im:remove-friend', userId),
   imSendMessage: (input: any) => ipcRenderer.invoke('im:send-message', input),
   imListMessages: (peerUserId: any, options: any) => ipcRenderer.invoke('im:list-messages', peerUserId, options),
   imLoadHistory: (peerUserId: any, options: any) => ipcRenderer.invoke('im:load-history', peerUserId, options),

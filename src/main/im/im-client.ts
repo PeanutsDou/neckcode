@@ -1,17 +1,21 @@
 import { WebSocket } from 'ws';
 import { randomUUID } from 'crypto';
-import { IM_DEFAULT_SERVER_URL, IM_RECONNECT_BACKOFF_MS, IM_HEARTBEAT_INTERVAL_MS, IM_HEARTBEAT_TIMEOUT_MS, IM_REQUEST_TIMEOUTS, IM_DEFAULT_REQUEST_TIMEOUT } from './im-config';
-import { normalizeError, serverErrorToClient, networkError } from './im-errors';
+import {
+  IM_DEFAULT_SERVER_URL,
+  IM_RECONNECT_BACKOFF_MS,
+  IM_HEARTBEAT_INTERVAL_MS,
+  IM_HEARTBEAT_TIMEOUT_MS,
+  IM_REQUEST_TIMEOUTS,
+  IM_DEFAULT_REQUEST_TIMEOUT,
+} from './im-config';
+import { serverErrorToClient, networkError } from './im-errors';
 import type { ImConnectionState, ImClientError, ImRegisterInput, ImLoginInput } from '../../shared/im-types';
 
-// 简单日志封装
 const logger = {
   info: (msg: string, meta?: Record<string, unknown>) => console.log(`[IM] ${msg}`, meta || ''),
   warn: (msg: string, meta?: Record<string, unknown>) => console.warn(`[IM] ${msg}`, meta || ''),
   error: (msg: string, meta?: Record<string, unknown>) => console.error(`[IM] ${msg}`, meta || ''),
 };
-
-// ─── 类型 ───
 
 interface PendingRequest {
   requestId: string;
@@ -25,11 +29,9 @@ interface PendingRequest {
 
 type EventHandler = (type: string, payload: unknown) => void;
 
-// ─── IM Client 类 ───
-
 export class ImClient {
   private ws: WebSocket | null = null;
-  private serverUrl: string = IM_DEFAULT_SERVER_URL;
+  private serverUrl = IM_DEFAULT_SERVER_URL;
   private connectionState: ImConnectionState = 'idle';
   private pendingRequests = new Map<string, PendingRequest>();
   private eventHandlers = new Set<EventHandler>();
@@ -40,8 +42,7 @@ export class ImClient {
   private manualLogout = false;
   private currentToken: string | null = null;
   private currentUserId: string | null = null;
-
-  // ─── 事件订阅 ───
+  private openWaiters: Array<{ resolve: () => void; reject: (error: ImClientError) => void; timeout: NodeJS.Timeout }> = [];
 
   onEvent(handler: EventHandler): () => void {
     this.eventHandlers.add(handler);
@@ -50,29 +51,62 @@ export class ImClient {
 
   private emit(type: string, payload: unknown): void {
     for (const handler of this.eventHandlers) {
-      try { handler(type, payload); } catch { /* ignore handler errors */ }
+      try { handler(type, payload); } catch { /* ignore renderer listener errors */ }
     }
   }
-
-  // ─── 状态 ───
 
   getState(): ImConnectionState { return this.connectionState; }
   getUserId(): string | null { return this.currentUserId; }
   getToken(): string | null { return this.currentToken; }
+  getCurrentToken(): string | null { return this.currentToken; }
+  getServerUrl(): string { return this.serverUrl; }
 
   private setState(state: ImConnectionState): void {
+    if (this.connectionState === state) return;
     this.connectionState = state;
     this.emit('connection-state', { state });
   }
-
-  // ─── 连接 ───
 
   connect(serverUrl?: string): void {
     if (serverUrl) this.serverUrl = serverUrl;
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     this.manualLogout = false;
-    this.reconnectAttempt = 0;
+    this.stopReconnect();
     this.doConnect();
+  }
+
+  async connectAndWait(serverUrl?: string, timeoutMs = 10000): Promise<void> {
+    if (serverUrl) this.serverUrl = serverUrl;
+    if (this.ws?.readyState === WebSocket.OPEN) return;
+
+    const promise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.openWaiters = this.openWaiters.filter((w) => w.resolve !== resolve);
+        reject(networkError('连接 IM 服务超时'));
+      }, timeoutMs);
+      this.openWaiters.push({ resolve, reject, timeout });
+    });
+
+    this.connect();
+    return promise;
+  }
+
+  private resolveOpenWaiters(): void {
+    const waiters = this.openWaiters;
+    this.openWaiters = [];
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.resolve();
+    }
+  }
+
+  private rejectOpenWaiters(error: ImClientError): void {
+    const waiters = this.openWaiters;
+    this.openWaiters = [];
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(error);
+    }
   }
 
   private doConnect(): void {
@@ -81,48 +115,48 @@ export class ImClient {
 
     try {
       this.ws = new WebSocket(this.serverUrl);
-    } catch (err) {
+    } catch {
       this.handleConnectionFailure(networkError('无法连接 IM 服务'));
       return;
     }
 
-    this.ws.on('open', () => {
+    const socket = this.ws;
+
+    socket.on('open', () => {
       logger.info('WebSocket opened');
-      // 如果有 token，自动发送 auth.token
+      this.resolveOpenWaiters();
+      this.startHeartbeat();
+
       if (this.currentToken) {
         this.setState('authenticating');
         this.sendRequest('auth.token', { token: this.currentToken })
-          .then(() => { /* auth.ok handled by onAuthOk */ })
-          .catch(() => { /* will be handled by response */ });
+          .then((payload) => this.onAuthOk(payload as Record<string, unknown>))
+          .catch((err) => this.emit('error', { error: err }));
+      } else {
+        this.setState('idle');
       }
-      this.startHeartbeat();
     });
 
-    this.ws.on('message', (data: Buffer) => {
+    socket.on('message', (data: Buffer) => {
       let msg: { type: string; requestId?: string; payload?: Record<string, unknown> };
       try { msg = JSON.parse(data.toString()); } catch { return; }
 
-      const requestId = msg.requestId;
-
-      // 处理心跳响应
       if (msg.type === 'pong') {
         this.resetHeartbeatTimeout();
       }
 
-      // 处理请求响应
-      if (requestId && this.pendingRequests.has(requestId)) {
-        const pending = this.pendingRequests.get(requestId)!;
-        this.pendingRequests.delete(requestId);
+      if (msg.requestId && this.pendingRequests.has(msg.requestId)) {
+        const pending = this.pendingRequests.get(msg.requestId)!;
+        this.pendingRequests.delete(msg.requestId);
         clearTimeout(pending.timeout);
 
         if (msg.type === 'auth.error' || msg.type === 'sys.error') {
-          const code = msg.payload?.code as string || 'UNKNOWN';
-          const message = msg.payload?.message as string || '未知错误';
-          // auth.error / TOKEN_INVALID 不 reject 所有请求，只 reject 当前
-          pending.reject(serverErrorToClient(code, message));
+          const code = String(msg.payload?.code || 'UNKNOWN');
+          const message = String(msg.payload?.message || '未知错误');
+          const error = serverErrorToClient(code, message);
+          pending.reject(error);
 
-          // token 失效时清空登录态
-          if (msg.type === 'auth.error' && (code === 'TOKEN_INVALID')) {
+          if (msg.type === 'auth.error' && code === 'TOKEN_INVALID') {
             this.currentToken = null;
             this.currentUserId = null;
             this.emit('auth-state', { status: 'loggedOut', user: null });
@@ -130,53 +164,56 @@ export class ImClient {
           return;
         }
 
-        pending.resolve(msg.payload);
+        pending.resolve(msg.payload || {});
         return;
       }
 
-      // 处理服务端推送事件
       this.handleServerPush(msg);
     });
 
-    this.ws.on('close', (code: number) => {
+    socket.on('close', (code: number) => {
       logger.info('WebSocket closed', { code });
+      if (this.ws === socket) this.ws = null;
       this.stopHeartbeat();
       this.cleanupPending();
+      this.rejectOpenWaiters(networkError('IM 连接已关闭'));
 
       if (!this.manualLogout) {
         this.startReconnect();
       } else {
-        this.setState('offline');
+        this.setState('idle');
       }
     });
 
-    this.ws.on('error', (err: Error) => {
+    socket.on('error', (err: Error) => {
       logger.error('WebSocket error', { error: err.message });
-      // close 事件会随后触发，在 close 中处理重连
+      this.rejectOpenWaiters(networkError(err.message || 'IM 连接错误'));
     });
   }
 
   private handleConnectionFailure(err: ImClientError): void {
     this.setState('error');
+    this.rejectOpenWaiters(err);
     this.emit('error', { error: err });
     if (!this.manualLogout) this.startReconnect();
   }
 
-  disconnect(): void {
+  disconnect(options?: { keepToken?: boolean }): void {
     this.manualLogout = true;
     this.stopReconnect();
     this.stopHeartbeat();
     this.cleanupPending();
+    this.rejectOpenWaiters(networkError('IM 连接已断开'));
     if (this.ws) {
       this.ws.close(1000, 'Manual disconnect');
       this.ws = null;
     }
-    this.currentToken = null;
-    this.currentUserId = null;
+    if (!options?.keepToken) {
+      this.currentToken = null;
+      this.currentUserId = null;
+    }
     this.setState('idle');
   }
-
-  // ─── 请求 ───
 
   async sendRequest(type: string, payload?: Record<string, unknown>, options?: { localMessageId?: string }): Promise<unknown> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -193,16 +230,27 @@ export class ImClient {
       }, timeoutMs);
 
       this.pendingRequests.set(requestId, {
-        requestId, type, createdAt: Date.now(), timeout, resolve, reject,
+        requestId,
+        type,
+        createdAt: Date.now(),
+        timeout,
+        resolve,
+        reject,
         localMessageId: options?.localMessageId,
       });
     });
 
-    this.ws.send(JSON.stringify({ type, requestId, payload: payload || {} }));
+    try {
+      this.ws.send(JSON.stringify({ type, requestId, payload: payload || {} }));
+    } catch {
+      const pending = this.pendingRequests.get(requestId);
+      if (pending) clearTimeout(pending.timeout);
+      this.pendingRequests.delete(requestId);
+      throw networkError('发送 IM 请求失败');
+    }
+
     return promise;
   }
-
-  // ─── 认证 ───
 
   async register(input: ImRegisterInput): Promise<unknown> {
     const result = await this.sendRequest('auth.register', {
@@ -224,15 +272,19 @@ export class ImClient {
   }
 
   async loginWithToken(token: string): Promise<unknown> {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      await this.connectAndWait();
+    }
     this.currentToken = token;
+    this.setState('authenticating');
     const result = await this.sendRequest('auth.token', { token });
     this.onAuthOk(result as Record<string, unknown>);
     return result;
   }
 
   private onAuthOk(payload: Record<string, unknown>): void {
-    this.currentToken = payload.token as string;
-    this.currentUserId = payload.userId as string;
+    this.currentToken = String(payload.token || this.currentToken || '');
+    this.currentUserId = String(payload.userId || '');
     this.setState('online');
     this.reconnectAttempt = 0;
     this.emit('auth-state', {
@@ -246,19 +298,16 @@ export class ImClient {
     });
   }
 
-  getCurrentToken(): string | null { return this.currentToken; }
-
-  // ─── 心跳 ───
-
   private startHeartbeat(): void {
+    this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.sendRequest('ping', {}).catch(() => {});
-        this.heartbeatTimeoutTimer = setTimeout(() => {
-          logger.warn('Heartbeat timeout');
-          this.ws?.close(4002, 'Heartbeat timeout');
-        }, IM_HEARTBEAT_TIMEOUT_MS);
-      }
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      this.resetHeartbeatTimeout();
+      this.sendRequest('ping', {}).catch(() => {});
+      this.heartbeatTimeoutTimer = setTimeout(() => {
+        logger.warn('Heartbeat timeout');
+        this.ws?.close(4002, 'Heartbeat timeout');
+      }, IM_HEARTBEAT_TIMEOUT_MS);
     }, IM_HEARTBEAT_INTERVAL_MS);
   }
 
@@ -270,11 +319,12 @@ export class ImClient {
   }
 
   private stopHeartbeat(): void {
-    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
-    if (this.heartbeatTimeoutTimer) { clearTimeout(this.heartbeatTimeoutTimer); this.heartbeatTimeoutTimer = null; }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.resetHeartbeatTimeout();
   }
-
-  // ─── 重连 ───
 
   private startReconnect(): void {
     if (this.reconnectTimer) return;
@@ -291,34 +341,31 @@ export class ImClient {
   }
 
   private stopReconnect(): void {
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.reconnectAttempt = 0;
   }
 
-  // ─── 清理 ───
-
   private cleanupPending(): void {
     const err = networkError('连接已断开');
-    for (const [, pending] of this.pendingRequests) {
+    for (const pending of this.pendingRequests.values()) {
       clearTimeout(pending.timeout);
       pending.reject(err);
     }
     this.pendingRequests.clear();
   }
 
-  // ─── 服务端推送 ───
-
   private handleServerPush(msg: { type: string; payload?: Record<string, unknown> }): void {
     this.emit(msg.type, msg.payload || {});
 
-    // 处理下线相关的特殊推送
     if (msg.type === 'sys.error' && msg.payload?.code === 'REPLACED_BY_NEW_CONNECTION') {
       this.manualLogout = true;
+      this.currentToken = null;
+      this.currentUserId = null;
       this.ws?.close(1000);
       this.emit('auth-state', { status: 'loggedOut', user: null });
     }
   }
 }
-
-// ─── 简单日志封装 ───
-// (defined at top of file)

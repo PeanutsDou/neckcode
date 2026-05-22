@@ -1,67 +1,119 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useImStore } from '../../stores/im-store';
 
 export function FriendRequests() {
+  const [error, setError] = useState('');
   const requests = useImStore((s) => s.requests);
-  const addFriend = useImStore((s) => s.addFriend);
-  const removeRequest = useImStore((s) => s.removeRequest);
   const toggleRequests = useImStore((s) => s.toggleRequests);
 
+  const incoming = requests.filter((r) => r.direction === 'in');
+  const outgoing = requests.filter((r) => r.direction === 'out');
+
   const handleAccept = async (userId: string) => {
+    setError('');
     try {
       const result = await window.electronAPI!.imAcceptFriend(userId);
       if ((result as any).error) throw new Error((result as any).error.message);
-      const friendInfo = (result as any).friend || (result as any);
-      addFriend({
-        userId: friendInfo.userId || userId,
-        username: friendInfo.username || '',
-        displayName: friendInfo.displayName || '',
-        avatar: friendInfo.avatar || null,
-        status: 'accepted',
-        online: friendInfo.online || false,
-        lastSeenAt: null,
-      });
-      removeRequest(userId);
     } catch (err: any) {
-      // ignore
+      setError(err?.message || '处理失败');
     }
   };
 
   return (
-    <div style={{
-      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10,
-      background: 'var(--bg-primary)', display: 'flex', flexDirection: 'column',
-    }}>
-      <div style={{ padding: '10px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ color: 'var(--text-primary)', fontSize: 13, fontWeight: 600 }}>好友申请</span>
-        <button onClick={toggleRequests}
-          style={{ padding: '2px 8px', border: 'none', borderRadius: 4, background: 'var(--bg-surface)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer' }}
-        >✕</button>
+    <div style={panelStyle}>
+      <div style={headerStyle}>
+        <span style={{ color: 'var(--text-primary)', fontSize: 13, fontWeight: 600 }}>好友请求</span>
+        <button onClick={toggleRequests} style={closeStyle}>×</button>
       </div>
 
+      {error && <div style={errorStyle}>{error}</div>}
+
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {requests.length === 0 ? (
-          <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>暂无好友申请</div>
+        {incoming.length === 0 && outgoing.length === 0 ? (
+          <div style={emptyStyle}>暂无好友请求</div>
         ) : (
-          requests.map((req) => (
-            <div key={req.userId} style={{
-              padding: '10px', borderBottom: '1px solid color-mix(in srgb, var(--border) 50%, transparent)',
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            }}>
-              <div>
-                <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{req.displayName}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>@{req.username}</div>
+          <>
+            {incoming.map((req) => (
+              <div key={`in-${req.userId}`} style={rowStyle}>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{req.displayName}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>@{req.username}</div>
+                </div>
+                <button onClick={() => handleAccept(req.userId)} style={actionBtnStyle}>接受</button>
               </div>
-              <button onClick={() => handleAccept(req.userId)}
-                style={{
-                  padding: '4px 12px', border: 'none', borderRadius: 4, cursor: 'pointer',
-                  background: 'var(--accent)', color: '#fff', fontSize: 12,
-                }}
-              >接受</button>
-            </div>
-          ))
+            ))}
+            {outgoing.map((req) => (
+              <div key={`out-${req.userId}`} style={rowStyle}>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{req.displayName}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>@{req.username}</div>
+                </div>
+                <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>等待对方确认</span>
+              </div>
+            ))}
+          </>
         )}
       </div>
     </div>
   );
 }
+
+const panelStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  zIndex: 10,
+  background: 'var(--bg-primary)',
+  display: 'flex',
+  flexDirection: 'column',
+  borderRight: '1px solid var(--border)',
+};
+
+const headerStyle: React.CSSProperties = {
+  padding: 10,
+  borderBottom: '1px solid var(--border)',
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+};
+
+const closeStyle: React.CSSProperties = {
+  padding: '3px 8px',
+  border: '1px solid var(--border)',
+  borderRadius: 7,
+  background: 'var(--bg-surface)',
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  cursor: 'pointer',
+};
+
+const errorStyle: React.CSSProperties = {
+  color: 'var(--error)',
+  fontSize: 12,
+  padding: '7px 10px',
+};
+
+const rowStyle: React.CSSProperties = {
+  padding: 10,
+  borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)',
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: 8,
+};
+
+const actionBtnStyle: React.CSSProperties = {
+  padding: '4px 12px',
+  border: '1px solid var(--accent)',
+  borderRadius: 7,
+  cursor: 'pointer',
+  background: 'var(--accent)',
+  color: '#fff',
+  fontSize: 12,
+};
+
+const emptyStyle: React.CSSProperties = {
+  padding: 20,
+  color: 'var(--text-muted)',
+  fontSize: 12,
+  textAlign: 'center',
+};

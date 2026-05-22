@@ -344,6 +344,9 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
         requestId: req.requestId,
         payload: {
           userId: result.userId,
+          username: result.username,
+          displayName: result.displayName,
+          avatar: result.avatar,
           status: result.status,
         },
       });
@@ -401,6 +404,28 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
       return;
     }
 
+    case 'friend.remove': {
+      const p = req.payload || {};
+      const targetUserId = String(p.userId || '').trim();
+      if (!targetUserId) {
+        sendError(ctx, req.requestId, new AppError(ErrorCodes.BAD_REQUEST, '缺少 userId'));
+        return;
+      }
+
+      const result = friends.removeFriend(ctx.userId!, targetUserId);
+      send(ctx, {
+        type: 'friend.remove_ack',
+        requestId: req.requestId,
+        payload: { userId: result.userId },
+      });
+
+      pushToUser(targetUserId, {
+        type: 'friend.remove_notify',
+        payload: { userId: ctx.userId },
+      });
+      return;
+    }
+
     case 'friend.list': {
       const result = friends.listFriends(ctx.userId!, getOnlineUserIds());
       send(ctx, {
@@ -439,21 +464,31 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
         },
       });
 
-      // 如果接收方在线，推送 msg.new
+      const messagePayload = {
+        messageId: result.messageId,
+        fromUser: ctx.userId,
+        fromName: ctx.displayName,
+        toUser: result.toUser,
+        content: result.content,
+        msgType: result.msgType,
+        createdAt: result.createdAt,
+      };
+
+      // 在线消息直接转发；离线时只保存未送达队列，送达后删除，不保存长期历史。
       if (pushToUser(toUser, {
         type: 'msg.new',
-        payload: {
+        payload: messagePayload,
+      })) {
+        logger.info('Message pushed online', { messageId: result.messageId, toUser });
+      } else {
+        messages.queueOfflineMessage({
           messageId: result.messageId,
-          fromUser: ctx.userId,
-          fromName: ctx.displayName,
+          fromUser: ctx.userId!,
           toUser: result.toUser,
           content: result.content,
           msgType: result.msgType,
           createdAt: result.createdAt,
-        },
-      })) {
-        // 推送成功，标记 delivered
-        messages.markDelivered([result.messageId]);
+        });
       }
       return;
     }
@@ -500,15 +535,6 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
         },
       });
 
-      // 如果原发送方在线，推送已读通知
-      pushToUser(result.fromUser, {
-        type: 'msg.read_notify',
-        payload: {
-          messageId: result.messageId,
-          fromUser: ctx.userId,
-          readAt: result.readAt,
-        },
-      });
       return;
     }
 

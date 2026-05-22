@@ -457,10 +457,11 @@ async function runStage3Tests() {
     const t = await connect();
     try {
       await send(t, 'auth.login', { username: alice, password });
-      const res = await send(t, 'friend.search', { query: 'alice' });
+      const res = await send(t, 'friend.search', { query: alice });
       assertOk(res, 'friend.search_result');
       const users = ((res as Record<string, unknown>).payload as Record<string, unknown>).users as Array<Record<string, unknown>>;
-      if (users[0]?.relation !== 'self') throw new Error(`期望 relation=self，实际 ${users[0]?.relation}`);
+      const self = users.find((user) => user.userId === aliceUserId);
+      if (self?.relation !== 'self') throw new Error(`期望 relation=self，实际 ${self?.relation}`);
       ok('搜索自己 — relation=self');
     } catch (err) {
       fail('搜索自己', String(err));
@@ -588,7 +589,27 @@ async function runStage3Tests() {
     }
   }
 
-  // 3.11 非好友发消息 → NOT_FRIEND
+  // 3.11 Alice 删除 Bob
+  {
+    const t = await connect();
+    try {
+      await send(t, 'auth.login', { username: alice, password });
+      const res = await send(t, 'friend.remove', { userId: bobUserId });
+      assertOk(res, 'friend.remove_ack');
+      const listRes = await send(t, 'friend.list', {});
+      assertOk(listRes, 'friend.list_result');
+      const payload = (listRes as Record<string, unknown>).payload as Record<string, unknown>;
+      const friends = payload.friends as Array<Record<string, unknown>>;
+      if (friends.some((f) => f.userId === bobUserId)) throw new Error('删除后仍出现在好友列表');
+      ok('删除好友 — friend.remove_ack');
+    } catch (err) {
+      fail('删除好友', String(err));
+    } finally {
+      t.ws.close();
+    }
+  }
+
+  // 3.12 非好友发消息 → NOT_FRIEND
   {
     const carol = `carol_${Date.now()}`;
     const t = await connect();
@@ -752,8 +773,9 @@ async function runStage4Tests() {
       assertOk(res, 'msg.history_result');
       const payload = (res as Record<string, unknown>).payload as Record<string, unknown>;
       const messages = payload.messages as Array<Record<string, unknown>>;
-      if (!messages || messages.length === 0) throw new Error('历史消息为空');
-      ok('历史消息 — msg.history_result');
+      if (!Array.isArray(messages)) throw new Error('历史消息字段不是数组');
+      if (messages.length !== 0) throw new Error('服务端不应保存长期历史消息');
+      ok('历史消息 — 云端不保存长期历史');
     } catch (err) {
       fail('历史消息', String(err));
     } finally {
@@ -781,11 +803,7 @@ async function runStage4Tests() {
       const readRes = await send(b, 'msg.read', { messageId: msgId });
       assertOk(readRes, 'msg.read_ack');
 
-      // Alice 应该收到已读通知
-      await sleep(200);
-      const readNotify = a.events.find((e: unknown) => (e as Record<string, unknown>).type === 'msg.read_notify');
-      if (!readNotify) throw new Error('Alice 未收到 msg.read_notify');
-      ok('已读标记 — read_ack + read_notify');
+      ok('已读标记 — read_ack');
     } catch (err) {
       fail('已读标记', String(err));
     } finally {

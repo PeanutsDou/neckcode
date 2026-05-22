@@ -127,6 +127,33 @@ export function addFriend(currentUserId: string, targetUserId: string): AddFrien
   };
 }
 
+export interface RemoveFriendResult {
+  userId: string;
+}
+
+export function removeFriend(currentUserId: string, targetUserId: string): RemoveFriendResult {
+  if (currentUserId === targetUserId) {
+    throw new AppError(ErrorCodes.BAD_REQUEST, '不能删除自己');
+  }
+
+  const db = getDb();
+  const relation = db.prepare(
+    'SELECT status FROM friends WHERE user_id = ? AND friend_id = ?'
+  ).get(currentUserId, targetUserId) as { status: string } | undefined;
+
+  if (!relation) {
+    throw new AppError(ErrorCodes.NOT_FRIEND, '好友关系不存在');
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM friends WHERE user_id = ? AND friend_id = ?').run(currentUserId, targetUserId);
+    db.prepare('DELETE FROM friends WHERE user_id = ? AND friend_id = ?').run(targetUserId, currentUserId);
+  });
+  tx();
+
+  return { userId: targetUserId };
+}
+
 // ─── 接受好友 ───
 
 export interface AcceptFriendResult {
