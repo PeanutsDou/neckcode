@@ -17,6 +17,8 @@ import { ImShell } from './components/im/ImShell';
 import { ResizeHandle } from './components/ResizeHandle';
 import { UpdateBanner } from './components/UpdateBanner';
 import { useAppStore } from './stores/app-store';
+import { useImStore } from './stores/im-store';
+import { useImEvents } from './hooks/useImEvents';
 import { LIGHT_SCHEMES, normalizeLightScheme, type LightSchemeId } from './theme-schemes';
 
 class ErrorBoundary extends Component<
@@ -54,7 +56,7 @@ function handleClose() {
 }
 
 export default function App() {
-  const { showSidebar, toggleSidebar, showSessions, leftWidth, setLeftWidth, theme, setTheme, lightScheme, setLightScheme } = useAppStore();
+  const { showSidebar, toggleSidebar, showSessions, toggleSessions, leftWidth, setLeftWidth, theme, setTheme, lightScheme, setLightScheme } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
@@ -63,6 +65,7 @@ export default function App() {
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [version, setVersion] = useState('');
   const [codeLeftWidth, setCodeLeftWidth] = useState(() => 280);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const handleCodeResize = (delta: number) => {
     setCodeLeftWidth(prev => {
       const next = Math.max(180, Math.min(window.innerWidth * 0.5, prev + delta));
@@ -71,8 +74,13 @@ export default function App() {
     });
   };
   const [mainMode, setMainMode] = useState<'agent' | 'im'>('agent');
+  const imConversations = useImStore(s => s.conversations);
+  const imFriends = useImStore(s => s.friends);
+  const [imNotice, setImNotice] = useState<{ peerId: string; count: number } | null>(null);
+  const unreadBaselineRef = React.useRef<Record<string, number>>({});
   const toolbarRef = React.useRef<HTMLDivElement>(null);
   const appearanceRef = React.useRef<HTMLDivElement>(null);
+  useImEvents();
 
   // Double-click entire toolbar area to maximize
   useEffect(() => {
@@ -126,6 +134,7 @@ export default function App() {
         useAppStore.getState().setAvailableModels(c.models || []);
         if (c.codeLeftWidth) setCodeLeftWidth(c.codeLeftWidth);
       }).catch(() => {});
+      window.electronAPI?.getAlwaysOnTop?.().then((v: boolean) => setAlwaysOnTop(Boolean(v))).catch(() => {});
     };
     loadConfig();
     const handler = () => loadConfig();
@@ -155,6 +164,51 @@ export default function App() {
     setAppearanceOpen(false);
   };
 
+  useEffect(() => {
+    const currentCounts = Object.fromEntries(imConversations.map(c => [c.peerUserId, c.unreadCount || 0]));
+    if (mainMode === 'im') {
+      unreadBaselineRef.current = currentCounts;
+      setImNotice(null);
+      return;
+    }
+
+    let latestIncrease: { peerId: string; count: number; at: number } | null = null;
+    for (const conversation of imConversations) {
+      const current = conversation.unreadCount || 0;
+      const baseline = unreadBaselineRef.current[conversation.peerUserId] || 0;
+      if (current > baseline) {
+        const count = current - baseline;
+        if (!latestIncrease || (conversation.lastMessageAt || 0) > latestIncrease.at) {
+          latestIncrease = { peerId: conversation.peerUserId, count, at: conversation.lastMessageAt || 0 };
+        }
+      }
+    }
+
+    if (latestIncrease) setImNotice({ peerId: latestIncrease.peerId, count: latestIncrease.count });
+    unreadBaselineRef.current = currentCounts;
+  }, [imConversations, mainMode]);
+
+  const noticeConversation = imNotice
+    ? imConversations.find(c => c.peerUserId === imNotice.peerId)
+    : undefined;
+  const noticeFriend = imNotice
+    ? imFriends.find(f => f.userId === imNotice.peerId)
+    : null;
+  const imStatusText = imNotice
+    ? `${noticeFriend?.displayName || noticeFriend?.username || noticeConversation?.peerDisplayName || 'New'}`
+    : '';
+
+  const toggleAlwaysOnTop = async () => {
+    const next = !alwaysOnTop;
+    setAlwaysOnTop(next);
+    try {
+      const actual = await window.electronAPI?.setAlwaysOnTop?.(next);
+      setAlwaysOnTop(Boolean(actual));
+    } catch {
+      setAlwaysOnTop(!next);
+    }
+  };
+
   return (
     <ErrorBoundary>
       <div className="app-container">
@@ -163,12 +217,27 @@ export default function App() {
           <div className="toolbar-left">
             <img src="./icon.png" className="toolbar-icon" alt="" />
             <span className="toolbar-title">DeepSeek Code</span>
-            <button className={'toolbar-btn' + (mainMode === 'agent' ? ' active' : '')} onClick={() => setMainMode('agent')} style={{ marginLeft: 12 }}>Agent</button>
-            <button className={'toolbar-btn' + (mainMode === 'im' ? ' active' : '')} onClick={() => setMainMode('im')}>IM</button>
             <span className="toolbar-version" style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>v{version}</span>
           </div>
           <div className="toolbar-center" />
           <div className="toolbar-right">
+            <button
+              className={`im-island-btn ${mainMode === 'im' ? 'active' : ''} ${imNotice ? 'has-unread' : ''}`}
+              onClick={() => {
+                if (mainMode === 'im') {
+                  setMainMode('agent');
+                } else {
+                  setImNotice(null);
+                  setMainMode('im');
+                }
+              }}
+              title="IM Beta：测试中，功能可能不稳定"
+            >
+              <span className="im-island-label">IM</span>
+              <span className="im-island-beta">Beta</span>
+              {imStatusText && <span className="im-island-status">{imStatusText}</span>}
+              {imNotice && <span className="im-island-count">{imNotice.count > 99 ? '99+' : imNotice.count}</span>}
+            </button>
             <button className="toolbar-btn" onClick={() => setAgentOpen(true)}>
               Agent
             </button>
@@ -221,6 +290,13 @@ export default function App() {
               title="切换主题"
             >
               {theme === 'dark' ? '☀' : '☾'}
+            </button>
+            <button
+              className={`toolbar-btn pin-window-btn ${alwaysOnTop ? 'active' : ''}`}
+              onClick={toggleAlwaysOnTop}
+              title={alwaysOnTop ? '取消窗口置顶' : '窗口置顶'}
+            >
+              <span className="pin-window-icon" aria-hidden="true" />
             </button>
             <button
               className={`toolbar-btn icon-btn ${showSidebar ? 'active' : ''}`}
@@ -279,6 +355,9 @@ export default function App() {
                   </div>
                   <ResizeHandle direction="left" onResize={setLeftWidth} />
                 </>
+              )}
+              {!showSessions && (
+                <button className="session-rail-toggle" onClick={toggleSessions} title="展开会话列表">☰</button>
               )}
 
               <div className="chat-main">

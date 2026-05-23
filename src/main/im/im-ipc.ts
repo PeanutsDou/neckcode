@@ -9,6 +9,7 @@ import type {
   ImFriendRequest,
   ImMessage,
   ImConversation,
+  ImUser,
   ImSendMessageInput,
   ImSendMessageResult,
 } from '../../shared/im-types';
@@ -17,6 +18,7 @@ let imClient: ImClient | null = null;
 let mainWindow: BrowserWindow | null = null;
 let handlersRegistered = false;
 let flushingPending = false;
+let nextAuthShouldPersist = true;
 
 function getClient(): ImClient {
   if (!imClient) throw new Error('IM client not initialized');
@@ -38,6 +40,18 @@ function loadLocalState(): { friends: ImFriend[]; requests: ImFriendRequest[]; c
     friends: imStore.listCachedFriends(user.userId),
     requests: imStore.listFriendRequests(user.userId),
     conversations: imStore.listConversations(user.userId),
+  };
+}
+
+function authStateFromLocalUser(localUser: ImUser): ImAuthState {
+  return {
+    status: 'loggedIn',
+    user: {
+      userId: localUser.userId,
+      username: localUser.username,
+      displayName: localUser.displayName,
+      avatar: localUser.avatar,
+    },
   };
 }
 
@@ -187,7 +201,7 @@ function bindClientEvents(client: ImClient): void {
         if (authState.status === 'loggedIn' && authState.user && userId) {
           try {
             const token = client.getCurrentToken();
-            if (token) {
+            if (token && nextAuthShouldPersist) {
               const now = Math.floor(Date.now() / 1000);
               imStore.saveLocalUser({
                 userId: authState.user.userId,
@@ -197,7 +211,10 @@ function bindClientEvents(client: ImClient): void {
                 token,
                 tokenExpiresAt: now + 30 * 24 * 3600,
                 serverUrl: client.getServerUrl(),
+                autoLogin: true,
               });
+            } else if (!nextAuthShouldPersist) {
+              imStore.clearLocalUser();
             }
           } catch (err) {
             sendToRenderer('im:error', { error: cacheError(String(err)) });
@@ -308,44 +325,49 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
   ipcMain.handle('im:get-auth-state', async () => {
     const localUser = imStore.getLocalUser();
     if (!localUser) return { status: 'loggedOut', user: null } as ImAuthState;
+    if (!localUser.autoLogin) return { status: 'loggedOut', user: null } as ImAuthState;
 
     const client = getClient();
     if (client.getState() === 'online' && client.getUserId()) {
-      return {
-        status: 'loggedIn',
-        user: { userId: client.getUserId()!, username: localUser.username, displayName: localUser.displayName, avatar: localUser.avatar },
-      } as ImAuthState;
+      return authStateFromLocalUser(localUser);
     }
 
     try {
-      await client.connectAndWait(localUser.serverUrl || undefined);
-      await client.loginWithToken(localUser.token);
-      return {
-        status: 'loggedIn',
-        user: { userId: localUser.userId, username: localUser.username, displayName: localUser.displayName, avatar: localUser.avatar },
-      } as ImAuthState;
+      await client.loginWithToken(localUser.token, localUser.serverUrl || undefined);
+      return authStateFromLocalUser(localUser);
     } catch (err) {
-      sendToRenderer('im:error', { error: normalizeError(err) });
-      return { status: 'loggedOut', user: null } as ImAuthState;
+      const error = normalizeError(err);
+      sendToRenderer('im:error', { error });
+
+      if (error.code === 'TOKEN_INVALID' || error.code === 'INVALID_CREDENTIALS' || error.code === 'UNAUTHORIZED') {
+        imStore.clearLocalUser();
+        return { status: 'loggedOut', user: null } as ImAuthState;
+      }
+
+      sendToRenderer('im:connection-state', { state: client.getState() === 'idle' ? 'offline' : client.getState() });
+      emitLocalState();
+      return authStateFromLocalUser(localUser);
     }
   });
 
-  ipcMain.handle('im:register', async (_event, input: { username: string; password: string; displayName: string }) => {
+  ipcMain.handle('im:register', async (_event, input: { username: string; password: string; displayName: string; remember?: boolean }) => {
     try {
       if (!input.username || !input.password || !input.displayName) throw badRequestError('请填写用户名、密码和显示名称');
       const client = getClient();
       await client.connectAndWait();
+      nextAuthShouldPersist = input.remember !== false;
       return await client.register(input);
     } catch (err) {
       return { error: normalizeError(err) };
     }
   });
 
-  ipcMain.handle('im:login', async (_event, input: { username: string; password: string }) => {
+  ipcMain.handle('im:login', async (_event, input: { username: string; password: string; remember?: boolean }) => {
     try {
       if (!input.username || !input.password) throw badRequestError('请填写用户名和密码');
       const client = getClient();
       await client.connectAndWait();
+      nextAuthShouldPersist = input.remember !== false;
       return await client.login(input);
     } catch (err) {
       return { error: normalizeError(err) };

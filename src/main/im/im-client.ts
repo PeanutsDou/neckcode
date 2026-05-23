@@ -40,6 +40,7 @@ export class ImClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private manualLogout = false;
+  private manualTokenLogin = false;
   private currentToken: string | null = null;
   private currentUserId: string | null = null;
   private openWaiters: Array<{ resolve: () => void; reject: (error: ImClientError) => void; timeout: NodeJS.Timeout }> = [];
@@ -127,7 +128,7 @@ export class ImClient {
       this.resolveOpenWaiters();
       this.startHeartbeat();
 
-      if (this.currentToken) {
+      if (this.currentToken && !this.manualTokenLogin) {
         this.setState('authenticating');
         this.sendRequest('auth.token', { token: this.currentToken })
           .then((payload) => this.onAuthOk(payload as Record<string, unknown>))
@@ -271,15 +272,20 @@ export class ImClient {
     return result;
   }
 
-  async loginWithToken(token: string): Promise<unknown> {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
-      await this.connectAndWait();
-    }
+  async loginWithToken(token: string, serverUrl?: string): Promise<unknown> {
     this.currentToken = token;
-    this.setState('authenticating');
-    const result = await this.sendRequest('auth.token', { token });
-    this.onAuthOk(result as Record<string, unknown>);
-    return result;
+    this.manualTokenLogin = true;
+    try {
+      if (this.ws?.readyState !== WebSocket.OPEN) {
+        await this.connectAndWait(serverUrl);
+      }
+      this.setState('authenticating');
+      const result = await this.sendRequest('auth.token', { token });
+      this.onAuthOk(result as Record<string, unknown>);
+      return result;
+    } finally {
+      this.manualTokenLogin = false;
+    }
   }
 
   private onAuthOk(payload: Record<string, unknown>): void {

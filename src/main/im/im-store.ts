@@ -19,6 +19,7 @@ export function initImStore(): void {
       token TEXT NOT NULL,
       token_expires_at INTEGER NOT NULL,
       server_url TEXT NOT NULL,
+      auto_login INTEGER NOT NULL DEFAULT 1,
       updated_at INTEGER NOT NULL
     );
 
@@ -86,9 +87,14 @@ export function initImStore(): void {
 
     CREATE INDEX IF NOT EXISTS idx_im_conv_updated ON im_conversations(owner_user_id, updated_at DESC);
   `);
+
+  const localUserColumns = db.prepare('PRAGMA table_info(im_local_user)').all() as Array<{ name: string }>;
+  if (!localUserColumns.some(col => col.name === 'auto_login')) {
+    db.exec('ALTER TABLE im_local_user ADD COLUMN auto_login INTEGER NOT NULL DEFAULT 1');
+  }
 }
 
-export function getLocalUser(): (ImUser & { token: string; tokenExpiresAt: number; serverUrl: string }) | null {
+export function getLocalUser(): (ImUser & { token: string; tokenExpiresAt: number; serverUrl: string; autoLogin: boolean }) | null {
   const db = getDb();
   const row = db.prepare('SELECT * FROM im_local_user LIMIT 1').get() as Record<string, unknown> | undefined;
   if (!row) return null;
@@ -100,14 +106,15 @@ export function getLocalUser(): (ImUser & { token: string; tokenExpiresAt: numbe
     token: row.token as string,
     tokenExpiresAt: row.token_expires_at as number,
     serverUrl: row.server_url as string,
+    autoLogin: row.auto_login !== 0,
   };
 }
 
-export function saveLocalUser(user: { userId: string; username: string; displayName: string; avatar?: string | null; token: string; tokenExpiresAt: number; serverUrl: string }): void {
+export function saveLocalUser(user: { userId: string; username: string; displayName: string; avatar?: string | null; token: string; tokenExpiresAt: number; serverUrl: string; autoLogin?: boolean }): void {
   const db = getDb();
   db.prepare(`
-    INSERT INTO im_local_user (user_id, username, display_name, avatar, token, token_expires_at, server_url, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO im_local_user (user_id, username, display_name, avatar, token, token_expires_at, server_url, auto_login, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET
       username = excluded.username,
       display_name = excluded.display_name,
@@ -115,8 +122,9 @@ export function saveLocalUser(user: { userId: string; username: string; displayN
       token = excluded.token,
       token_expires_at = excluded.token_expires_at,
       server_url = excluded.server_url,
+      auto_login = excluded.auto_login,
       updated_at = excluded.updated_at
-  `).run(user.userId, user.username, user.displayName, user.avatar || null, user.token, user.tokenExpiresAt, user.serverUrl, Date.now());
+  `).run(user.userId, user.username, user.displayName, user.avatar || null, user.token, user.tokenExpiresAt, user.serverUrl, user.autoLogin === false ? 0 : 1, Date.now());
 }
 
 export function clearLocalUser(): void {

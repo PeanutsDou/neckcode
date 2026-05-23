@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useImStore } from '../../stores/im-store';
 import type { ImConversation, ImFriend } from '../../../shared/im-types';
 
@@ -16,6 +16,15 @@ export function FriendList() {
   const toggleRequests = useImStore((s) => s.toggleRequests);
   const requestCount = useImStore((s) => s.requests.filter((r) => r.direction === 'in').length);
   const clearUnread = useImStore((s) => s.clearUnread);
+  const removeFriend = useImStore((s) => s.removeFriend);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; friend: ImFriend } | null>(null);
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [ctxMenu]);
 
   const conversationByPeer = new Map(conversations.map((c) => [c.peerUserId, c]));
   const items: FriendItem[] = friends
@@ -32,6 +41,26 @@ export function FriendList() {
     setActivePeer(peerId);
     clearUnread(peerId);
     window.electronAPI!.imClearUnread(peerId).catch(() => {});
+  };
+
+  const handleContextMenu = (event: React.MouseEvent, friend: ImFriend) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCtxMenu({ x: event.clientX, y: event.clientY, friend });
+  };
+
+  const handleRemoveFriend = async () => {
+    if (!ctxMenu) return;
+    const friend = ctxMenu.friend;
+    setCtxMenu(null);
+    const name = friend.displayName || friend.username;
+    if (!window.confirm(`删除好友「${name}」？本地会话入口会移除，历史消息缓存暂不清理。`)) return;
+    const result = await window.electronAPI!.imRemoveFriend(friend.userId);
+    if ((result as any)?.error) {
+      useImStore.getState().setError((result as any).error);
+      return;
+    }
+    removeFriend(friend.userId);
   };
 
   return (
@@ -56,6 +85,7 @@ export function FriendList() {
                 type="button"
                 key={friend.userId}
                 onClick={() => handleSelect(friend.userId)}
+                onContextMenu={(event) => handleContextMenu(event, friend)}
                 style={{
                   ...itemStyle,
                   background: isActive ? 'var(--bg-hover)' : 'transparent',
@@ -75,6 +105,13 @@ export function FriendList() {
           })
         )}
       </div>
+      {ctxMenu && (
+        <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+          <button className="ctx-menu-item ctx-menu-danger" onClick={handleRemoveFriend}>
+            删除好友
+          </button>
+        </div>
+      )}
     </div>
   );
 }

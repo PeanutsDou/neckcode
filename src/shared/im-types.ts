@@ -119,7 +119,7 @@ export interface ImClientError {
 // ─── IPC 事件类型 ───
 
 export interface ImEventMap {
-  'im:auth-state': { state: ImAuthState };
+  'im:auth-state': ImAuthState;
   'im:connection-state': { state: ImConnectionState };
   'im:friends-updated': { friends: ImFriend[]; requests: ImFriendRequest[] };
   'im:friend-request': { request: ImFriendRequest };

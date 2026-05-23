@@ -20,6 +20,7 @@ src/**/*.d.ts.map
 .tmp-electron-*.log
 dist-*.log
 server-std*.log
+server/*-inbox.log
 
 # IM Server
 server/data/

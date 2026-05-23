@@ -84,6 +84,8 @@ const api = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),
   close: () => ipcRenderer.invoke('window:close'),
+  setAlwaysOnTop: (enabled: boolean) => ipcRenderer.invoke('window:set-always-on-top', enabled),
+  getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
 
   // Terminal
   startTerminal: () => ipcRenderer.invoke('terminal:start'),
@@ -102,6 +104,13 @@ const api = {
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id),
   renameSession: (id: string, title: string) => ipcRenderer.invoke('session:rename', id, title),
   setSessionPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('session:set-pinned', id, pinned),
+  listSessionGroups: () => ipcRenderer.invoke('session-groups:list'),
+  createSessionGroup: (name?: string) => ipcRenderer.invoke('session-groups:create', name),
+  renameSessionGroup: (id: string, name: string) => ipcRenderer.invoke('session-groups:rename', id, name),
+  setSessionGroupPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('session-groups:set-pinned', id, pinned),
+  setSessionGroupCollapsed: (id: string, collapsed: boolean) => ipcRenderer.invoke('session-groups:set-collapsed', id, collapsed),
+  assignSessionGroup: (sessionId: string, groupId: string | null) => ipcRenderer.invoke('session-groups:assign-session', sessionId, groupId),
+  deleteSessionGroup: (id: string) => ipcRenderer.invoke('session-groups:delete', id),
   generateTitle: (message: string) => ipcRenderer.invoke('session:generate-title', message),
 
   // Skills

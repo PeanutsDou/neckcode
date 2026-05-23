@@ -17,6 +17,7 @@ export function LoginPage() {
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const connectionState = useImStore((s) => s.connectionState);
@@ -38,8 +39,8 @@ export function LoginPage() {
     setError('');
     try {
       const result = mode === 'register'
-        ? await window.electronAPI!.imRegister({ username: username.trim(), password, displayName: displayName.trim() })
-        : await window.electronAPI!.imLogin({ username: username.trim(), password });
+        ? await window.electronAPI!.imRegister({ username: username.trim(), password, displayName: displayName.trim(), remember })
+        : await window.electronAPI!.imLogin({ username: username.trim(), password, remember });
       if ((result as any).error) throw new Error((result as any).error.message);
     } catch (err: any) {
       setError(err?.message || '请求失败，请确认 IM 服务已启动');
@@ -119,6 +120,15 @@ export function LoginPage() {
           )}
 
           {error && <div style={errorStyle}>{error}</div>}
+
+          <label style={rememberStyle}>
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+            />
+            <span>记住账号并自动登录</span>
+          </label>
 
           <button type="submit" disabled={disabled} style={submitStyle(disabled)}>
             {loading ? '处理中...' : mode === 'login' ? '登录 IM' : '创建账号'}
@@ -218,6 +228,15 @@ const errorStyle: React.CSSProperties = {
   border: '1px solid color-mix(in srgb, var(--error) 34%, transparent)',
   borderRadius: 10,
   background: 'color-mix(in srgb, var(--error) 8%, var(--bg-primary))',
+};
+
+const rememberStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 7,
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  userSelect: 'none',
 };
 
 const submitStyle = (disabled: boolean): React.CSSProperties => ({

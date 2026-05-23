@@ -96,6 +96,19 @@ ipcMain.handle('close:choice', async (_event, action: string, remember: boolean)
   }
 });
 
+ipcMain.handle('window:set-always-on-top', async (_event, enabled: boolean) => {
+  const value = Boolean(enabled);
+  mainWindow?.setAlwaysOnTop(value);
+  const cfg = getConfig();
+  cfg.alwaysOnTop = value;
+  await saveConfig();
+  return value;
+});
+
+ipcMain.handle('window:get-always-on-top', async () => {
+  return mainWindow?.isAlwaysOnTop() || Boolean(getConfig().alwaysOnTop);
+});
+
 function createProvider(modelOverride?: string, options?: { stream?: boolean; maxTokens?: number }): Provider {
   const cfg = getConfig();
   const model = modelOverride || cfg.activeModel;
@@ -232,6 +245,9 @@ function createWindow(): void {
       sandbox: false,
     },
   });
+  if (getConfig().alwaysOnTop) {
+    mainWindow.setAlwaysOnTop(true);
+  }
 
   void loadRenderer(mainWindow).catch(err => {
     console.error('Failed to load renderer:', err);

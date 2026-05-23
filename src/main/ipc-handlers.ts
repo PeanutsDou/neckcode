@@ -17,9 +17,16 @@ import {
   deleteSession,
   listSessions,
   loadSession,
+  listSessionGroups,
+  createSessionGroup,
+  renameSessionGroup,
   renameSession,
   saveSession,
+  setSessionGroup,
+  setSessionGroupCollapsed,
+  setSessionGroupPinned,
   setSessionPinned,
+  deleteSessionGroup,
   type SessionData,
 } from './session-store';
 
@@ -1007,6 +1014,34 @@ export function setupIpcHandlers(
 
   ipcMain.handle('session:set-pinned', async (_event, id: string, pinned: boolean) => {
     return setSessionPinned(id, pinned);
+  });
+
+  ipcMain.handle('session-groups:list', async () => {
+    return listSessionGroups();
+  });
+
+  ipcMain.handle('session-groups:create', async (_event, name?: string) => {
+    return createSessionGroup(name || '新建组');
+  });
+
+  ipcMain.handle('session-groups:rename', async (_event, id: string, name: string) => {
+    return renameSessionGroup(id, name);
+  });
+
+  ipcMain.handle('session-groups:set-pinned', async (_event, id: string, pinned: boolean) => {
+    return setSessionGroupPinned(id, pinned);
+  });
+
+  ipcMain.handle('session-groups:set-collapsed', async (_event, id: string, collapsed: boolean) => {
+    return setSessionGroupCollapsed(id, collapsed);
+  });
+
+  ipcMain.handle('session-groups:assign-session', async (_event, sessionId: string, groupId: string | null) => {
+    return setSessionGroup(sessionId, groupId || null);
+  });
+
+  ipcMain.handle('session-groups:delete', async (_event, id: string) => {
+    return deleteSessionGroup(id);
   });
 
   ipcMain.handle('session:generate-title', async (_event, userMessage: string) => {

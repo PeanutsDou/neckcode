@@ -19,17 +19,6 @@ export function DirectChat() {
 
   const friend = friends.find((f) => f.userId === activePeerId);
 
-  const handleRemoveFriend = async () => {
-    const name = friend?.displayName || activePeerId;
-    if (!window.confirm(`删除好友「${name}」？本地会话入口会移除，历史消息缓存暂不清理。`)) return;
-    const result = await window.electronAPI!.imRemoveFriend(activePeerId);
-    if ((result as any)?.error) {
-      useImStore.getState().setError((result as any).error);
-      return;
-    }
-    useImStore.getState().removeFriend(activePeerId);
-  };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={headerStyle}>
@@ -39,7 +28,6 @@ export function DirectChat() {
           <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{friend?.online ? '在线' : '离线'}</span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={handleRemoveFriend} style={closeStyle}>删除好友</button>
           <button onClick={() => setActivePeer(null)} style={closeStyle}>×</button>
         </div>
       </div>

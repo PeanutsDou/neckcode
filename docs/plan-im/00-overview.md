@@ -1,5 +1,7 @@
 # IM Phase 1 总览
 
+> Current implementation note: after the lightweight storage decision, the server does not keep long-term chat history. Use `09-current-implementation.md` as the source of truth for the implemented storage and delivery behavior; earlier sections in this planning set may still describe the original cloud-history design.
+
 > 状态：草案，待审阅  
 > 依据：../PLAN-IM.md  
 > 实际开发以本目录文档为准

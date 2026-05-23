@@ -37,6 +37,7 @@ export interface AppConfigData {
   theme?: 'light' | 'dark';
   lightScheme?: string;
   closeBehavior?: 'ask' | 'tray' | 'quit';
+  alwaysOnTop?: boolean;
   fontScale?: number;
   codeLeftWidth?: number;
   window?: {

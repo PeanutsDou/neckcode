@@ -1,5 +1,7 @@
 # PLAN-IM — 即时通讯模块开发文档
 
+> Current implementation note: the implemented IM server is intentionally lightweight and does not keep long-term chat history. Message history is stored locally on each client. See `plan-im/09-current-implementation.md` for the current source of truth.
+
 > 版本：0.1.0  
 > 状态：规划中  
 > 依赖：DeepSeek Code master
