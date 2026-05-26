@@ -23,8 +23,13 @@ body,
   border: 1px solid color-mix(in srgb, var(--border, #888) 40%, transparent);
   border-radius: 14px;
   background: color-mix(in srgb, var(--bg-primary, #1e1e23) 88%, transparent);
+  background-clip: padding-box;
   color: var(--text-primary, #eee);
-  filter: drop-shadow(0 6px 20px rgba(0, 0, 0, 0.35));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, #000 6%, transparent);
+  filter: none;
+  overflow: hidden;
   transform-origin: center;
   transition: opacity 150ms ease, transform 150ms ease;
   -webkit-app-region: drag;

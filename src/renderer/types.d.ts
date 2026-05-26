@@ -29,7 +29,7 @@ export interface ElectronAPI {
   onError: (cb: (sid: string, error: string | AgentError) => void) => () => void;
 
   // Config
-  getConfig: () => Promise<{ model: string; models: string[]; activeProvider: string; providers: Array<{ id: string; name: string; models: string[] }>; workspaceRoot: string; maxTurns: number; maxTokens: number; baseUrl: string; theme?: 'light' | 'dark'; lightScheme?: string; fontScale?: number; codeLeftWidth?: number; deepseekApiKey?: string; anthropicApiKey?: string }>;
+  getConfig: () => Promise<{ model: string; models: string[]; activeProvider: string; providers: Array<{ id: string; name: string; models: string[] }>; workspaceRoot: string; maxTurns: number; maxTokens: number; baseUrl: string; theme?: 'light' | 'dark'; lightScheme?: string; fontScale?: number; codeLeftWidth?: number; quickLauncher?: { enabled: boolean; triggerWindowMs: number; inputAutoHideMs: number; panelAutoHideMs: number; mode: 'chat' | 'find'; modelId?: string; findMaxDepth?: number }; deepseekApiKey?: string; anthropicApiKey?: string }>;
   setConfig: (key: string, value: unknown) => Promise<void>;
   getProviders: () => Promise<unknown[]>;
   setProvider: (config: unknown) => Promise<void>;
@@ -45,6 +45,7 @@ export interface ElectronAPI {
   saveSession: (session: unknown) => Promise<void>;
   loadSession: (id: string) => Promise<unknown>;
   listSessions: () => Promise<unknown[]>;
+  onSessionSaved?: (cb: (data: unknown) => void) => () => void;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<boolean>;
   generateTitle: (message: string) => Promise<string | null>;

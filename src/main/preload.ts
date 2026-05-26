@@ -153,6 +153,11 @@ const api = {
     ipcRenderer.on('quick-chat:saved', listener);
     return () => { ipcRenderer.removeListener('quick-chat:saved', listener); };
   },
+  onQuickChatSaveError: (cb: (data: unknown) => void) => {
+    const listener = (_: unknown, data: unknown) => cb(data);
+    ipcRenderer.on('quick-chat:save-error', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:save-error', listener); };
+  },
   quickFindLocalSearch: (query: string) => ipcRenderer.invoke('quick-find:local-search', query),
   quickFindAgentSearch: (query: string) => ipcRenderer.invoke('quick-find:agent-search', query),
   quickFindOpen: (path: string, reveal?: boolean) => ipcRenderer.invoke('quick-find:open', path, reveal),
@@ -171,6 +176,11 @@ const api = {
   saveSession: (session: unknown) => ipcRenderer.invoke('session:save', session),
   loadSession: (id: string) => ipcRenderer.invoke('session:load', id),
   listSessions: () => ipcRenderer.invoke('session:list'),
+  onSessionSaved: (cb: (data: unknown) => void) => {
+    const listener = (_: unknown, data: unknown) => cb(data);
+    ipcRenderer.on('session:saved', listener);
+    return () => { ipcRenderer.removeListener('session:saved', listener); };
+  },
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id),
   renameSession: (id: string, title: string) => ipcRenderer.invoke('session:rename', id, title),
   setSessionPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('session:set-pinned', id, pinned),

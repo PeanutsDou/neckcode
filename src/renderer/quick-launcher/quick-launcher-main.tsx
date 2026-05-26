@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import '../styles/global.css';
+import '../styles/dark.css';
 import './quick-launcher.css';
 
 type LauncherMode = 'chat' | 'find';
@@ -53,6 +55,7 @@ declare global {
       onQuickChatError?: (cb: (error: { message?: string; suggestion?: string }) => void) => () => void;
       onQuickChatCleared?: (cb: () => void) => () => void;
       onQuickChatSaved?: (cb: (data: { sessionId?: string }) => void) => () => void;
+      onQuickChatSaveError?: (cb: (data: { message?: string }) => void) => () => void;
       quickFindLocalSearch?: (query: string) => Promise<QuickFindResult[]>;
       quickFindAgentSearch?: (query: string) => Promise<QuickFindResult[]>;
       quickFindOpen?: (path: string, reveal?: boolean) => Promise<{ ok?: boolean; error?: string }>;
@@ -102,6 +105,8 @@ function QuickLauncherApp() {
   const [selectedFindIndex, setSelectedFindIndex] = useState(-1);
   const [agentSearched, setAgentSearched] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [savingSession, setSavingSession] = useState(false);
+  const [savedSessionId, setSavedSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const findScrollRef = useRef<HTMLDivElement | null>(null);
@@ -133,20 +138,25 @@ function QuickLauncherApp() {
     visibleRef.current = true;
     setVisible(true);
     resetAutoHide();
-    // 立即尝试聚焦
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      setTimeout(() => inputRef.current?.focus(), 50);
-    });
+    const focusInput = () => {
+      window.focus();
+      inputRef.current?.focus({ preventScroll: true });
+    };
+    focusInput();
+    requestAnimationFrame(focusInput);
+    [16, 32, 64, 120, 220, 360].forEach(ms => window.setTimeout(focusInput, ms));
   }, [resetAutoHide]);
 
   // 每次窗口显示时自动聚焦输入框
   useLayoutEffect(() => {
     if (visible) {
-      // 多次尝试聚焦，覆盖各种渲染时序
-      const focus = () => inputRef.current?.focus();
+      // 多次尝试聚焦，覆盖透明窗口显示、置前和渲染恢复之间的时序差。
+      const focus = () => {
+        window.focus();
+        inputRef.current?.focus({ preventScroll: true });
+      };
       focus();
-      const ids = [10, 40, 100, 200].map(ms => setTimeout(focus, ms));
+      const ids = [10, 30, 60, 100, 160, 240, 360, 520].map(ms => setTimeout(focus, ms));
       return () => ids.forEach(clearTimeout);
     }
   }, [visible]);
@@ -231,9 +241,19 @@ function QuickLauncherApp() {
         setStreamingText('');
         setLoading(false);
         setStatus({});
+        setSavingSession(false);
+        setSavedSessionId(null);
         setExpandedMode(false);
       }),
-      api?.onQuickChatSaved?.((data) => showNotice(data?.sessionId ? '已保留到主会话列表' : '已保留')),
+      api?.onQuickChatSaved?.((data) => {
+        setSavingSession(false);
+        setSavedSessionId(data?.sessionId || null);
+        showNotice(data?.sessionId ? '已保留到主会话列表' : '已保留');
+      }),
+      api?.onQuickChatSaveError?.((data) => {
+        setSavingSession(false);
+        showNotice(data?.message || '保留对话失败');
+      }),
     ].filter(Boolean) as Array<() => void>;
 
     return () => {
@@ -391,9 +411,26 @@ function QuickLauncherApp() {
   }, [hide]);
 
   const save = useCallback(async () => {
-    const result = await window.electronAPI?.quickChatSaveSession?.();
-    if (result && result.ok === false) showNotice('当前没有可保留的对话。');
-  }, [showNotice]);
+    if (savingSession) return;
+    if (entries.length === 0 && !streamingText) {
+      showNotice('当前没有可保留的对话。');
+      return;
+    }
+    setSavingSession(true);
+    try {
+      const result = await window.electronAPI?.quickChatSaveSession?.();
+      if (!result || result.ok === false) {
+        setSavingSession(false);
+        showNotice(result?.error === 'EMPTY_CHAT' ? '当前没有可保留的对话。' : `保留失败：${result?.error || '未知错误'}`);
+        return;
+      }
+      setSavedSessionId(result.sessionId || null);
+      showNotice('已保留到主会话列表');
+    } catch (error) {
+      setSavingSession(false);
+      showNotice(error instanceof Error ? `保留失败：${error.message}` : '保留对话失败');
+    }
+  }, [entries.length, savingSession, showNotice, streamingText]);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     noteActivity();
@@ -447,7 +484,9 @@ function QuickLauncherApp() {
         <div className="quick-chat-header">
           <div className="quick-chat-title">Quick Chat</div>
           <div className="quick-chat-actions">
-            <button type="button" onClick={save}>保留对话</button>
+            <button type="button" onClick={save} disabled={savingSession}>
+              {savingSession ? '保留中...' : savedSessionId ? '已保留' : '保留对话'}
+            </button>
             <button type="button" onClick={clear}>清空</button>
             <button type="button" onClick={close}>×</button>
           </div>

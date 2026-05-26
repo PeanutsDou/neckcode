@@ -52,6 +52,7 @@ export interface AppConfigData {
     inputAutoHideMs: number;
     panelAutoHideMs: number;
     mode: 'chat' | 'find';
+    modelId?: string;
     position?: { x: number; y: number };
     findMaxDepth?: number;
   };
@@ -106,6 +107,7 @@ const defaultConfig: AppConfigData = {
     inputAutoHideMs: 5000,
     panelAutoHideMs: 10000,
     mode: 'chat',
+    modelId: 'deepseek-v4-flash',
     position: undefined,
     findMaxDepth: 4,
   },
@@ -230,6 +232,12 @@ function normalizeLoadedConfig(loaded: AppConfigData): AppConfigData {
       ? Math.max(1000, Math.min(120000, rawQuickLauncher.panelAutoHideMs))
       : defaultConfig.quickLauncher!.panelAutoHideMs,
     mode: rawQuickLauncher.mode === 'find' ? 'find' : 'chat',
+    modelId: typeof rawQuickLauncher.modelId === 'string'
+      && loaded.providers.some(p => p.models.some(m => m.name === rawQuickLauncher.modelId))
+      ? rawQuickLauncher.modelId
+      : loaded.providers.some(p => p.models.some(m => m.name === defaultConfig.quickLauncher!.modelId))
+        ? defaultConfig.quickLauncher!.modelId
+        : loaded.activeModel,
     position: isRecord(rawQuickLauncher.position)
       && typeof rawQuickLauncher.position.x === 'number'
       && typeof rawQuickLauncher.position.y === 'number'

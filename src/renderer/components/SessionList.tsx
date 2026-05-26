@@ -80,7 +80,11 @@ export function SessionList() {
     loadSessions();
     const handler = () => loadSessions();
     window.addEventListener('session-saved', handler);
-    return () => window.removeEventListener('session-saved', handler);
+    const unsubscribe = window.electronAPI?.onSessionSaved?.(handler);
+    return () => {
+      window.removeEventListener('session-saved', handler);
+      unsubscribe?.();
+    };
   }, [loadSessions]);
 
   useEffect(() => {

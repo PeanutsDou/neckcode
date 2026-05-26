@@ -31,6 +31,7 @@ interface QuickLauncherSettings {
   triggerWindowMs: number;
   inputAutoHideMs: number;
   panelAutoHideMs: number;
+  modelId: string;
   findMaxDepth: number;
 }
 
@@ -58,6 +59,7 @@ export function SettingsDialog({ open, onClose }: Props) {
     triggerWindowMs: 400,
     inputAutoHideMs: 5000,
     panelAutoHideMs: 10000,
+    modelId: 'deepseek-v4-flash',
     findMaxDepth: 4,
   });
 
@@ -77,6 +79,7 @@ export function SettingsDialog({ open, onClose }: Props) {
         triggerWindowMs: typeof quick.triggerWindowMs === 'number' ? quick.triggerWindowMs : 400,
         inputAutoHideMs: typeof quick.inputAutoHideMs === 'number' ? quick.inputAutoHideMs : 5000,
         panelAutoHideMs: typeof quick.panelAutoHideMs === 'number' ? quick.panelAutoHideMs : 10000,
+        modelId: typeof quick.modelId === 'string' ? quick.modelId : 'deepseek-v4-flash',
         findMaxDepth: typeof quick.findMaxDepth === 'number' ? quick.findMaxDepth : 4,
       });
     } catch { /* */ }
@@ -336,6 +339,17 @@ export function SettingsDialog({ open, onClose }: Props) {
                     value={quickLauncher.triggerWindowMs}
                     onChange={e => void updateQuickLauncher({ triggerWindowMs: Number(e.target.value) || 400 })}
                   />
+                </label>
+                <label className="settings-label">悬浮输入框模型
+                  <select
+                    className="settings-input"
+                    value={quickLauncher.modelId}
+                    onChange={e => void updateQuickLauncher({ modelId: e.target.value })}
+                  >
+                    {providerList.flatMap(provider => provider.models).map(model => (
+                      <option key={model} value={model}>{model}</option>
+                    ))}
+                  </select>
                 </label>
                 <label className="settings-label">输入框自动隐藏(ms)
                   <input

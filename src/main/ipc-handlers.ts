@@ -29,7 +29,7 @@ import {
   deleteSessionGroup,
   type SessionData,
 } from './session-store';
-import { getQuickLauncherWindow } from './quick-launcher/window';
+import { getQuickLauncherWindow, syncQuickLauncherTheme } from './quick-launcher/window';
 
 let agentMdContent = '';
 let agentMdFiles: string[] = [];
@@ -351,6 +351,13 @@ export function setupIpcHandlers(
   function getSessionModelId(sessionId?: string): string {
     const cfg = getConfig();
     if (!sessionId) return cfg.activeModel;
+    if (sessionId === QUICK_CHAT_SESSION_ID || sessionId === '__quick_find__') {
+      const quickModel = cfg.quickLauncher?.modelId;
+      if (quickModel && cfg.providers.some(p => p.models.some(m => m.name === quickModel))) {
+        sessionModels.set(sessionId, quickModel);
+        return quickModel;
+      }
+    }
     const cached = sessionModels.get(sessionId);
     if (cached) return cached;
     const savedModel = loadSession(sessionId)?.modelId;
@@ -624,6 +631,17 @@ export function setupIpcHandlers(
     getQuickWindow()?.webContents.send(channel, ...args);
   }
 
+  function notifySessionsChanged(sessionId?: string): void {
+    const payload = JSON.stringify({ sessionId });
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      win.webContents.send('session:saved', { sessionId });
+      win.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('session-saved', { detail: ${payload} }))`,
+      ).catch(() => {});
+    }
+  }
+
   function quickEntry(role: 'user' | 'assistant' | 'tool', content: string, extra: Record<string, unknown> = {}) {
     const entry = {
       id: `${role}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -780,25 +798,36 @@ export function setupIpcHandlers(
     emitQuick('quick-chat:cleared');
   });
 
-  ipcMain.handle('quick-chat:save-session', async () => {
-    if (quickChatEntries.length === 0) return { ok: false, error: 'EMPTY_CHAT' };
-    const id = quickChatSavedSessionId || `session_quick_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const firstUser = quickChatEntries.find(e => e.role === 'user')?.content;
-    const agent = sessionAgents.get(QUICK_CHAT_SESSION_ID);
-    saveSession({
-      id,
-      title: typeof firstUser === 'string' ? firstUser.slice(0, 50) : 'Quick Chat',
-      projectPath: '',
-      modelId: getSessionModelId(QUICK_CHAT_SESSION_ID),
-      messages: quickChatEntries,
-      agentMessages: agent?.getMessages() || [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    quickChatSavedSessionId = id;
-    getWindow()?.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('session-saved'))").catch(() => {});
-    emitQuick('quick-chat:saved', { sessionId: id });
-    return { ok: true, sessionId: id };
+  ipcMain.handle('quick-chat:save-session', async (event) => {
+    try {
+      if (quickChatEntries.length === 0) return { ok: false, error: 'EMPTY_CHAT' };
+      const id = quickChatSavedSessionId || `session_quick_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const now = Date.now();
+      const firstUser = quickChatEntries.find(e => e.role === 'user')?.content;
+      const agent = sessionAgents.get(QUICK_CHAT_SESSION_ID);
+      saveSession({
+        id,
+        title: typeof firstUser === 'string' ? firstUser.slice(0, 50) : 'Quick Chat',
+        projectPath: '',
+        modelId: getSessionModelId(QUICK_CHAT_SESSION_ID),
+        messages: quickChatEntries.map(entry => ({ ...entry })),
+        agentMessages: agent?.getMessages() || [],
+        createdAt: now,
+        updatedAt: now,
+      });
+      quickChatSavedSessionId = id;
+      const payload = { sessionId: id };
+      event.sender.send('quick-chat:saved', payload);
+      if (getQuickWindow()?.webContents.id !== event.sender.id) {
+        emitQuick('quick-chat:saved', payload);
+      }
+      notifySessionsChanged(id);
+      return { ok: true, sessionId: id };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      event.sender.send('quick-chat:save-error', { message });
+      return { ok: false, error: message || 'SAVE_FAILED' };
+    }
   });
 
   // ── QuickFind Agent 语义检索（轻量专用，每次独立上下文）──
@@ -1105,8 +1134,18 @@ export function setupIpcHandlers(
     else if (key === 'contextLimit') cfg.agent.contextLimit = value as number;
     else if (key === 'systemPrompt') cfg.systemPrompt = value as string;
     else if (key === 'workspaceRoot') { cfg.agent.workspaceRoot = value as string; await saveConfig(); return; }
-    else if (key === 'theme') { cfg.theme = value as 'light' | 'dark'; await saveConfig(); return; }
-    else if (key === 'lightScheme') { cfg.lightScheme = value as string; await saveConfig(); return; }
+    else if (key === 'theme') {
+      cfg.theme = value as 'light' | 'dark';
+      await saveConfig();
+      syncQuickLauncherTheme();
+      return;
+    }
+    else if (key === 'lightScheme') {
+      cfg.lightScheme = value as string;
+      await saveConfig();
+      syncQuickLauncherTheme();
+      return;
+    }
     else if (key === 'codeLeftWidth') { cfg.codeLeftWidth = value as number; await saveConfig(); return; }
     else if (key === 'fontScale') { cfg.fontScale = value as number; await saveConfig(); return; }
     else if (key === 'quickLauncher') {
@@ -1124,8 +1163,13 @@ export function setupIpcHandlers(
         triggerWindowMs: typeof input.triggerWindowMs === 'number' ? Math.max(150, Math.min(1200, input.triggerWindowMs)) : cfg.quickLauncher?.triggerWindowMs ?? 400,
         inputAutoHideMs: typeof input.inputAutoHideMs === 'number' ? Math.max(1000, Math.min(60000, input.inputAutoHideMs)) : cfg.quickLauncher?.inputAutoHideMs ?? 5000,
         panelAutoHideMs: typeof input.panelAutoHideMs === 'number' ? Math.max(1000, Math.min(120000, input.panelAutoHideMs)) : cfg.quickLauncher?.panelAutoHideMs ?? 10000,
+        modelId: typeof input.modelId === 'string' && cfg.providers.some(p => p.models.some(m => m.name === input.modelId))
+          ? input.modelId
+          : cfg.quickLauncher?.modelId || 'deepseek-v4-flash',
         findMaxDepth: typeof input.findMaxDepth === 'number' ? Math.max(1, Math.min(8, input.findMaxDepth)) : cfg.quickLauncher?.findMaxDepth ?? 4,
       };
+      sessionModels.delete(QUICK_CHAT_SESSION_ID);
+      sessionModels.delete('__quick_find__');
       await saveConfig();
       return;
     }

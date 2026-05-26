@@ -99,6 +99,7 @@ export function createQuickLauncherWindow(): BrowserWindow {
     },
   });
 
+  launcherWindow.setSkipTaskbar(true);
   launcherWindow.setAlwaysOnTop(true, 'floating');
   launcherWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
@@ -121,19 +122,39 @@ export function getQuickLauncherWindow(): BrowserWindow | null {
 export function showQuickLauncher(): void {
   const win = createQuickLauncherWindow();
   if (!win.isVisible()) placeLauncher(win);
+  win.setFocusable(true);
+  win.setSkipTaskbar(true);
   win.show();
+  win.setSkipTaskbar(true);
+  win.moveTop();
   win.focus();
+  win.webContents.focus();
   setTimeout(() => {
     if (!win.isDestroyed()) {
+      win.focus();
+      win.webContents.focus();
       win.webContents.send('quick-launcher:shown');
-      // 推送当前主题
-      const cfg = getConfig();
-      win.webContents.executeJavaScript(`
-        document.documentElement.setAttribute('data-theme', '${cfg.theme || 'light'}');
-        document.documentElement.setAttribute('data-light-scheme', '${cfg.lightScheme || 'default'}');
-      `).catch(() => {});
+      syncQuickLauncherTheme();
     }
   }, 20);
+  setTimeout(() => {
+    if (!win.isDestroyed() && win.isVisible()) {
+      win.focus();
+      win.webContents.focus();
+    }
+  }, 80);
+}
+
+export function syncQuickLauncherTheme(): void {
+  const win = getQuickLauncherWindow();
+  if (!win || win.isDestroyed()) return;
+  const cfg = getConfig();
+  const theme = cfg.theme || 'light';
+  const lightScheme = cfg.lightScheme || 'default';
+  win.webContents.executeJavaScript(`
+    document.documentElement.setAttribute('data-theme', ${JSON.stringify(theme)});
+    document.documentElement.setAttribute('data-light-scheme', ${JSON.stringify(lightScheme)});
+  `).catch(() => {});
 }
 
 export function hideQuickLauncher(): void {
