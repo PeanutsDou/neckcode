@@ -26,6 +26,14 @@ interface BalanceInfo {
   currency: string;
 }
 
+interface QuickLauncherSettings {
+  enabled: boolean;
+  triggerWindowMs: number;
+  inputAutoHideMs: number;
+  panelAutoHideMs: number;
+  findMaxDepth: number;
+}
+
 export function SettingsDialog({ open, onClose }: Props) {
   const [providerList, setProviderList] = useState<ProviderItem[]>([]);
 
@@ -45,6 +53,13 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [balance, setBalance] = useState<BalanceInfo | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [quickLauncher, setQuickLauncher] = useState<QuickLauncherSettings>({
+    enabled: true,
+    triggerWindowMs: 400,
+    inputAutoHideMs: 5000,
+    panelAutoHideMs: 10000,
+    findMaxDepth: 4,
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -56,7 +71,21 @@ export function SettingsDialog({ open, onClose }: Props) {
       const cfg = await window.electronAPI.getConfig() as any;
       const list = cfg.providers || [];
       setProviderList(list.map((p: any) => ({ id: p.id, name: p.name, models: Array.isArray(p.models) ? p.models.map((m: any) => typeof m === 'string' ? m : m.name) : [] })));
+      const quick = cfg.quickLauncher || {};
+      setQuickLauncher({
+        enabled: quick.enabled !== false,
+        triggerWindowMs: typeof quick.triggerWindowMs === 'number' ? quick.triggerWindowMs : 400,
+        inputAutoHideMs: typeof quick.inputAutoHideMs === 'number' ? quick.inputAutoHideMs : 5000,
+        panelAutoHideMs: typeof quick.panelAutoHideMs === 'number' ? quick.panelAutoHideMs : 10000,
+        findMaxDepth: typeof quick.findMaxDepth === 'number' ? quick.findMaxDepth : 4,
+      });
     } catch { /* */ }
+  };
+
+  const updateQuickLauncher = async (patch: Partial<QuickLauncherSettings>) => {
+    const next = { ...quickLauncher, ...patch };
+    setQuickLauncher(next);
+    await window.electronAPI.setConfig('quickLauncher', next);
   };
 
   const inferModelMode = (name: string): 'text' | 'multimodal' => {
@@ -288,6 +317,57 @@ export function SettingsDialog({ open, onClose }: Props) {
                 ))}
               </div>
               <button className="btn btn-send" onClick={startNew} style={{ width: '100%', marginTop: 8 }}>＋ 添加供应商</button>
+              <div className="quick-settings-card">
+                <div className="quick-settings-title">QuickLauncher</div>
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={quickLauncher.enabled}
+                    onChange={e => void updateQuickLauncher({ enabled: e.target.checked })}
+                  />
+                  双击 Ctrl 唤起
+                </label>
+                <label className="settings-label">双击判定窗口(ms)
+                  <input
+                    type="number"
+                    className="settings-input"
+                    min={150}
+                    max={1200}
+                    value={quickLauncher.triggerWindowMs}
+                    onChange={e => void updateQuickLauncher({ triggerWindowMs: Number(e.target.value) || 400 })}
+                  />
+                </label>
+                <label className="settings-label">输入框自动隐藏(ms)
+                  <input
+                    type="number"
+                    className="settings-input"
+                    min={1000}
+                    max={60000}
+                    value={quickLauncher.inputAutoHideMs}
+                    onChange={e => void updateQuickLauncher({ inputAutoHideMs: Number(e.target.value) || 5000 })}
+                  />
+                </label>
+                <label className="settings-label">对话框自动隐藏(ms)
+                  <input
+                    type="number"
+                    className="settings-input"
+                    min={1000}
+                    max={120000}
+                    value={quickLauncher.panelAutoHideMs}
+                    onChange={e => void updateQuickLauncher({ panelAutoHideMs: Number(e.target.value) || 10000 })}
+                  />
+                </label>
+                <label className="settings-label">本地检索深度
+                  <input
+                    type="number"
+                    className="settings-input"
+                    min={1}
+                    max={8}
+                    value={quickLauncher.findMaxDepth}
+                    onChange={e => void updateQuickLauncher({ findMaxDepth: Number(e.target.value) || 4 })}
+                  />
+                </label>
+              </div>
             </div>
           </div>
 

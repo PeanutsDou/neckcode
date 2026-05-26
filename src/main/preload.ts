@@ -1,5 +1,5 @@
 // @ts-nocheck
-﻿import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 
 console.log('[preload] loading...');
 
@@ -86,6 +86,76 @@ const api = {
   close: () => ipcRenderer.invoke('window:close'),
   setAlwaysOnTop: (enabled: boolean) => ipcRenderer.invoke('window:set-always-on-top', enabled),
   getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
+
+  // QuickLauncher
+  quickLauncherShow: () => ipcRenderer.invoke('quick-launcher:show'),
+  quickLauncherHide: () => ipcRenderer.invoke('quick-launcher:hide'),
+  quickLauncherToggle: () => ipcRenderer.invoke('quick-launcher:toggle'),
+  quickLauncherGetState: () => ipcRenderer.invoke('quick-launcher:get-state'),
+  quickLauncherSetMode: (mode: 'chat' | 'find') => ipcRenderer.invoke('quick-launcher:set-mode', mode),
+  quickLauncherSetExpanded: (expanded: boolean) => ipcRenderer.invoke('quick-launcher:set-expanded', expanded),
+  onQuickLauncherShow: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('quick-launcher:shown', listener);
+    return () => { ipcRenderer.removeListener('quick-launcher:shown', listener); };
+  },
+  onQuickLauncherHide: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('quick-launcher:hidden', listener);
+    return () => { ipcRenderer.removeListener('quick-launcher:hidden', listener); };
+  },
+  quickChatSend: (message: string) => ipcRenderer.invoke('quick-chat:send', message),
+  quickChatAbort: () => ipcRenderer.invoke('quick-chat:abort'),
+  quickChatClear: () => ipcRenderer.invoke('quick-chat:clear'),
+  quickChatSaveSession: () => ipcRenderer.invoke('quick-chat:save-session'),
+  onQuickChatUser: (cb: (entry: unknown) => void) => {
+    const listener = (_: unknown, entry: unknown) => cb(entry);
+    ipcRenderer.on('quick-chat:user', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:user', listener); };
+  },
+  onQuickChatDelta: (cb: (text: string) => void) => {
+    const listener = (_: unknown, text: string) => cb(text);
+    ipcRenderer.on('quick-chat:delta', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:delta', listener); };
+  },
+  onQuickChatDone: (cb: (data: unknown) => void) => {
+    const listener = (_: unknown, data: unknown) => cb(data);
+    ipcRenderer.on('quick-chat:done', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:done', listener); };
+  },
+  onQuickChatRunStatus: (cb: (status: unknown) => void) => {
+    const listener = (_: unknown, status: unknown) => cb(status);
+    ipcRenderer.on('quick-chat:run-status', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:run-status', listener); };
+  },
+  onQuickChatToolStart: (cb: (entry: unknown) => void) => {
+    const listener = (_: unknown, entry: unknown) => cb(entry);
+    ipcRenderer.on('quick-chat:tool-start', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:tool-start', listener); };
+  },
+  onQuickChatToolResult: (cb: (data: unknown) => void) => {
+    const listener = (_: unknown, data: unknown) => cb(data);
+    ipcRenderer.on('quick-chat:tool-result', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:tool-result', listener); };
+  },
+  onQuickChatError: (cb: (error: unknown) => void) => {
+    const listener = (_: unknown, error: unknown) => cb(error);
+    ipcRenderer.on('quick-chat:error', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:error', listener); };
+  },
+  onQuickChatCleared: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('quick-chat:cleared', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:cleared', listener); };
+  },
+  onQuickChatSaved: (cb: (data: unknown) => void) => {
+    const listener = (_: unknown, data: unknown) => cb(data);
+    ipcRenderer.on('quick-chat:saved', listener);
+    return () => { ipcRenderer.removeListener('quick-chat:saved', listener); };
+  },
+  quickFindLocalSearch: (query: string) => ipcRenderer.invoke('quick-find:local-search', query),
+  quickFindAgentSearch: (query: string) => ipcRenderer.invoke('quick-find:agent-search', query),
+  quickFindOpen: (path: string, reveal?: boolean) => ipcRenderer.invoke('quick-find:open', path, reveal),
 
   // Terminal
   startTerminal: () => ipcRenderer.invoke('terminal:start'),

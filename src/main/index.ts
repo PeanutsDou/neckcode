@@ -10,6 +10,9 @@ import { loadConfig, saveConfig, getConfig, getActiveProvider, getModelConfig, i
 import { loadSkills } from './skills/loader';
 import { createInvokeAgentHandler } from './tools/agent-tools';
 import { getAgents } from './config';
+import { setupQuickLauncherIpc } from './quick-launcher/ipc';
+import { startQuickLauncherHotkey, stopQuickLauncherHotkey } from './quick-launcher/hotkey';
+import { createQuickLauncherWindow, destroyQuickLauncherWindow, toggleQuickLauncher } from './quick-launcher/window';
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import type { ConfirmRequest } from '../shared/types';
@@ -412,12 +415,19 @@ app.whenReady().then(async () => {
   await ensureDefaultTemplates();
   await loadSkills(getConfig().agent.workspaceRoot);
   setupIpcHandlers(createProvider, getOrCreateTools);
+  setupQuickLauncherIpc();
   const { initAgentMd, initSkills } = require('./ipc-handlers');
   await initAgentMd();
   await initSkills();
   setupImIpcHandlers();
   createWindow();
   setupImIpcHandlers(mainWindow);
+  createQuickLauncherWindow();
+  try {
+    startQuickLauncherHotkey(toggleQuickLauncher);
+  } catch (err) {
+    console.warn('[QuickLauncher] global hotkey unavailable:', err);
+  }
   createTray();
   setupAutoUpdater();
 
@@ -438,4 +448,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   (app as any).__quitting = true;
+  stopQuickLauncherHotkey();
+  destroyQuickLauncherWindow();
 });

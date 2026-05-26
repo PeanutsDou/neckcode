@@ -1,6 +1,6 @@
 {
     "name": "deepseekcode",
-    "version": "0.2.3",
+    "version": "0.3.0",
     "description": "Desktop GUI coding assistant with multi-model support",
     "private": true,
     "main": "dist/main/index.js",
@@ -55,6 +55,7 @@
         },
         "asarUnpack": [
             "node_modules/better-sqlite3/**",
+            "node_modules/uiohook-napi/**",
             "node_modules/mermaid/**"
         ],
         "nsis": {
@@ -79,6 +80,7 @@
         "rehype-highlight": "^7.0.0",
         "remark-breaks": "^4.0.0",
         "remark-gfm": "^4.0.0",
+        "uiohook-napi": "^1.5.4",
         "ws": "^8.20.1",
         "xterm": "^5.3.0",
         "zustand": "^5.0.0"

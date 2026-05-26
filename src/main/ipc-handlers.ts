@@ -29,6 +29,7 @@ import {
   deleteSessionGroup,
   type SessionData,
 } from './session-store';
+import { getQuickLauncherWindow } from './quick-launcher/window';
 
 let agentMdContent = '';
 let agentMdFiles: string[] = [];
@@ -42,6 +43,9 @@ const sessionAbortControllers = new Map<string, AbortController>();
 const sessionRunningTurns = new Map<string, Promise<unknown>>();
 const sessionQueuedTurns = new Map<string, QueuedUserMessage[]>();
 const sessionModels = new Map<string, string>();
+const QUICK_CHAT_SESSION_ID = '__quick_chat_ephemeral__';
+const quickChatEntries: Array<Record<string, unknown>> = [];
+let quickChatSavedSessionId: string | null = null;
 
 let currentPermissionMode: PermissionMode = getConfig().permissionMode || 'default';
 
@@ -129,7 +133,7 @@ function emitQueuedCount(sessionId: string): void {
   getWindow()?.webContents.send('agent:queued-count', sessionId, sessionQueuedTurns.get(sessionId)?.length || 0);
 }
 
-function emitQueuedMessageStart(sessionId: string, message: QueuedUserMessage): void {
+  function emitQueuedMessageStart(sessionId: string, message: QueuedUserMessage): void {
   getWindow()?.webContents.send('agent:queued-message-start', sessionId, message);
 }
 
@@ -609,6 +613,191 @@ export function setupIpcHandlers(
     }
   }
 
+  function getQuickWindow() {
+    return getQuickLauncherWindow();
+  }
+
+  function emitQuick(channel: string, ...args: unknown[]): void {
+    getQuickWindow()?.webContents.send(channel, ...args);
+  }
+
+  function quickEntry(role: 'user' | 'assistant' | 'tool', content: string, extra: Record<string, unknown> = {}) {
+    const entry = {
+      id: `${role}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      role,
+      content,
+      timestamp: Date.now(),
+      ...extra,
+    };
+    quickChatEntries.push(entry);
+    return entry;
+  }
+
+  async function runQuickChatTurn(message: string, attachments: Attachment[], abortCtrl: AbortController): Promise<unknown> {
+    const agent = getOrCreateSessionAgent(QUICK_CHAT_SESSION_ID);
+    let deltaBuffer = '';
+    let reasoningBuffer = '';
+    let finalText = '';
+    let flushTimer: ReturnType<typeof setInterval> | null = null;
+    let errorSent = false;
+    let thinkingNotified = false;
+
+    const flushDelta = () => {
+      if (reasoningBuffer) {
+        if (!thinkingNotified) {
+          emitQuick('quick-chat:run-status', { phase: 'thinking', lastEventAt: Date.now() });
+          thinkingNotified = true;
+        }
+        emitQuick('quick-chat:thinking-delta', reasoningBuffer);
+        reasoningBuffer = '';
+      }
+      if (deltaBuffer) {
+        finalText += deltaBuffer;
+        emitQuick('quick-chat:run-status', { phase: 'streaming', lastEventAt: Date.now() });
+        emitQuick('quick-chat:delta', deltaBuffer);
+        deltaBuffer = '';
+      }
+    };
+
+    try {
+      emitQuick('quick-chat:run-status', { phase: 'starting', startedAt: Date.now(), lastEventAt: Date.now(), currentTool: null, errorCode: null });
+      const result = await agent.runUserTurn(
+        message,
+        attachments,
+        {
+          onModelRequest() {
+            emitQuick('quick-chat:run-status', { phase: 'requesting_model', lastEventAt: Date.now(), currentTool: null });
+          },
+          onContextUpdate(status) {
+            emitQuick('quick-chat:run-status', {
+              phase: 'requesting_model',
+              lastEventAt: Date.now(),
+              ...contextStatusToRunStatus(status),
+            });
+          },
+          onDelta(text) {
+            if (!flushTimer) flushTimer = setInterval(flushDelta, 50);
+            deltaBuffer += text;
+          },
+          onReasoning(text) {
+            if (!flushTimer) flushTimer = setInterval(flushDelta, 50);
+            reasoningBuffer += text;
+          },
+          onToolStart(toolCall) {
+            emitQuick('quick-chat:run-status', { phase: 'tool_running', lastEventAt: Date.now(), currentTool: toolCall.name });
+            const entry = quickEntry('tool', '', {
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              toolArgs: toolCall.argumentsText,
+            });
+            emitQuick('quick-chat:tool-start', entry);
+          },
+          onToolResult(toolCall, toolResult) {
+            emitQuick('quick-chat:run-status', { phase: 'requesting_model', lastEventAt: Date.now(), currentTool: null, lastTool: toolCall.name });
+            for (let i = quickChatEntries.length - 1; i >= 0; i--) {
+              if (quickChatEntries[i].toolCallId === toolCall.id) {
+                quickChatEntries[i] = { ...quickChatEntries[i], content: toolResult, toolResult };
+                break;
+              }
+            }
+            emitQuick('quick-chat:tool-result', {
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              result: toolResult,
+            });
+          },
+          onComplete(step) {
+            flushDelta();
+            const assistantText = step.text || finalText;
+            quickEntry('assistant', assistantText);
+            emitQuick('quick-chat:run-status', { phase: 'finishing', lastEventAt: Date.now(), currentTool: null });
+            emitQuick('quick-chat:done', { text: assistantText });
+          },
+          onError(error) {
+            const agentError = classifyAgentError(error);
+            emitQuick('quick-chat:run-status', {
+              phase: agentError.code === 'aborted' ? 'aborted' : 'error',
+              lastEventAt: Date.now(),
+              errorCode: agentError.code,
+              currentTool: null,
+            });
+            if (agentError.code !== 'aborted') {
+              errorSent = true;
+              emitQuick('quick-chat:error', agentError);
+            }
+          },
+        },
+        abortCtrl.signal,
+      );
+      if (flushTimer) { clearInterval(flushTimer); flushDelta(); }
+      return result;
+    } catch (err) {
+      if (flushTimer) { clearInterval(flushTimer); flushDelta(); }
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAbort = msg === 'Aborted' || (err instanceof Error && err.name === 'AbortError');
+      if (isAbort) {
+        emitQuick('quick-chat:run-status', { phase: 'aborted', lastEventAt: Date.now(), currentTool: null, errorCode: 'aborted' });
+      } else {
+        const agentError = classifyAgentError(err);
+        emitQuick('quick-chat:run-status', { phase: 'error', lastEventAt: Date.now(), currentTool: null, errorCode: agentError.code });
+        if (!errorSent) emitQuick('quick-chat:error', agentError);
+      }
+      return null;
+    }
+  }
+
+  ipcMain.handle('quick-chat:send', async (_event, message: string) => {
+    const text = String(message || '').trim();
+    if (!text) return { ok: false, error: 'EMPTY_MESSAGE' };
+    if (sessionRunningTurns.has(QUICK_CHAT_SESSION_ID)) {
+      return { ok: false, error: 'BUSY' };
+    }
+    const entry = quickEntry('user', text);
+    emitQuick('quick-chat:user', entry);
+    return runAgentTurnSerial(QUICK_CHAT_SESSION_ID, async (abortCtrl) => runQuickChatTurn(text, [], abortCtrl));
+  });
+
+  ipcMain.handle('quick-chat:abort', () => {
+    sessionAbortControllers.get(QUICK_CHAT_SESSION_ID)?.abort();
+    sessionAbortControllers.delete(QUICK_CHAT_SESSION_ID);
+    clearQueuedTurns(QUICK_CHAT_SESSION_ID);
+    cancelPendingInteractionsForSession(QUICK_CHAT_SESSION_ID, 'Quick chat aborted');
+    emitQuick('quick-chat:run-status', { phase: 'aborted', lastEventAt: Date.now(), currentTool: null, errorCode: 'aborted' });
+  });
+
+  ipcMain.handle('quick-chat:clear', () => {
+    sessionAbortControllers.get(QUICK_CHAT_SESSION_ID)?.abort();
+    sessionAbortControllers.delete(QUICK_CHAT_SESSION_ID);
+    sessionAgents.delete(QUICK_CHAT_SESSION_ID);
+    sessionModels.delete(QUICK_CHAT_SESSION_ID);
+    clearQueuedTurns(QUICK_CHAT_SESSION_ID);
+    cancelPendingInteractionsForSession(QUICK_CHAT_SESSION_ID, 'Quick chat cleared');
+    quickChatEntries.splice(0, quickChatEntries.length);
+    quickChatSavedSessionId = null;
+    emitQuick('quick-chat:cleared');
+  });
+
+  ipcMain.handle('quick-chat:save-session', async () => {
+    if (quickChatEntries.length === 0) return { ok: false, error: 'EMPTY_CHAT' };
+    const id = quickChatSavedSessionId || `session_quick_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const firstUser = quickChatEntries.find(e => e.role === 'user')?.content;
+    const agent = sessionAgents.get(QUICK_CHAT_SESSION_ID);
+    saveSession({
+      id,
+      title: typeof firstUser === 'string' ? firstUser.slice(0, 50) : 'Quick Chat',
+      projectPath: '',
+      modelId: getSessionModelId(QUICK_CHAT_SESSION_ID),
+      messages: quickChatEntries,
+      agentMessages: agent?.getMessages() || [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    quickChatSavedSessionId = id;
+    getWindow()?.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('session-saved'))").catch(() => {});
+    emitQuick('quick-chat:saved', { sessionId: id });
+    return { ok: true, sessionId: id };
+  });
+
   ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {
     const normalizedAttachments = normalizeAttachments(attachments || []);
     if (sessionRunningTurns.has(sessionId)) {
@@ -763,6 +952,7 @@ export function setupIpcHandlers(
       lightScheme: cfg.lightScheme || 'default',
       fontScale: cfg.fontScale || 100,
       codeLeftWidth: cfg.codeLeftWidth,
+      quickLauncher: cfg.quickLauncher,
       baseUrl: active.baseUrl,
       deepseekApiKey: cfg.providers.find(p => p.id === 'deepseek')?.apiKey || '',
       anthropicApiKey: cfg.providers.find(p => p.id === 'anthropic')?.apiKey || '',
@@ -791,6 +981,26 @@ export function setupIpcHandlers(
     else if (key === 'lightScheme') { cfg.lightScheme = value as string; await saveConfig(); return; }
     else if (key === 'codeLeftWidth') { cfg.codeLeftWidth = value as number; await saveConfig(); return; }
     else if (key === 'fontScale') { cfg.fontScale = value as number; await saveConfig(); return; }
+    else if (key === 'quickLauncher') {
+      const input = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+      cfg.quickLauncher = {
+        ...(cfg.quickLauncher || {
+          enabled: true,
+          triggerWindowMs: 400,
+          inputAutoHideMs: 5000,
+          panelAutoHideMs: 10000,
+          mode: 'chat' as const,
+          findMaxDepth: 4,
+        }),
+        enabled: typeof input.enabled === 'boolean' ? input.enabled : cfg.quickLauncher?.enabled ?? true,
+        triggerWindowMs: typeof input.triggerWindowMs === 'number' ? Math.max(150, Math.min(1200, input.triggerWindowMs)) : cfg.quickLauncher?.triggerWindowMs ?? 400,
+        inputAutoHideMs: typeof input.inputAutoHideMs === 'number' ? Math.max(1000, Math.min(60000, input.inputAutoHideMs)) : cfg.quickLauncher?.inputAutoHideMs ?? 5000,
+        panelAutoHideMs: typeof input.panelAutoHideMs === 'number' ? Math.max(1000, Math.min(120000, input.panelAutoHideMs)) : cfg.quickLauncher?.panelAutoHideMs ?? 10000,
+        findMaxDepth: typeof input.findMaxDepth === 'number' ? Math.max(1, Math.min(8, input.findMaxDepth)) : cfg.quickLauncher?.findMaxDepth ?? 4,
+      };
+      await saveConfig();
+      return;
+    }
     else if (key === 'deepseekApiKey') {
       const ds = cfg.providers.find(p => p.id === 'deepseek');
       if (ds) ds.apiKey = value as string;

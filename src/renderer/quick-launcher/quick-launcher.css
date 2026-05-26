@@ -1,0 +1,408 @@
+html,
+body,
+#quick-launcher-root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+}
+
+.quick-launcher-body {
+  user-select: none;
+}
+
+.quick-launcher-shell {
+  position: relative;
+  box-sizing: border-box;
+  width: 100vw;
+  display: flex;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(30, 30, 35, 0.9);
+  color: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  transform-origin: center;
+  transition: opacity 150ms ease, transform 150ms ease;
+  -webkit-app-region: drag;
+}
+
+.quick-launcher-shell.compact {
+  height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+}
+
+.quick-launcher-shell.expanded {
+  height: 100vh;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 10px;
+}
+
+.quick-launcher-shell.visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.quick-launcher-shell.hidden {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+.quick-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  -webkit-app-region: drag;
+}
+
+.quick-launcher-shell.expanded .quick-input-row {
+  flex: 0 0 auto;
+}
+
+.quick-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.9);
+  -webkit-app-region: drag;
+}
+
+.quick-chat-title {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.quick-chat-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.quick-chat-actions button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.quick-chat-actions button:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.quick-chat-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 6px 0 10px;
+  padding: 4px 2px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.quick-chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.quick-chat-messages::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.quick-msg {
+  max-width: 86%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.quick-msg.user {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.quick-msg.assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.quick-msg.tool {
+  align-self: stretch;
+  max-width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+}
+
+.quick-msg pre {
+  margin: 6px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(255, 255, 255, 0.62);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.quick-tool-name {
+  color: rgba(255, 255, 255, 0.82);
+  font-weight: 650;
+}
+
+.quick-launcher-drag {
+  width: 5px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  flex: 0 0 auto;
+}
+
+.quick-mode-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  -webkit-app-region: no-drag;
+}
+
+.quick-mode-indicator {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 120ms ease;
+  pointer-events: none;
+}
+
+.quick-mode-toggle[data-mode="find"] .quick-mode-indicator {
+  transform: translateX(100%);
+}
+
+.quick-mode-toggle button {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-content: center;
+  width: 58px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.quick-mode-toggle button.active {
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.quick-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.78;
+}
+
+.quick-launcher-shell input {
+  min-width: 0;
+  flex: 1;
+  height: 28px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 14px;
+  -webkit-app-region: no-drag;
+}
+
+.quick-launcher-shell input::placeholder {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.quick-send-btn {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.82);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.quick-send-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.quick-send-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.quick-phase-badge {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  -webkit-app-region: no-drag;
+}
+
+.quick-notice {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: calc(100% + 8px);
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(30, 30, 35, 0.92);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.quick-status {
+  flex: 0 0 auto;
+  min-height: 16px;
+  margin-top: 6px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 11px;
+  text-align: right;
+  -webkit-app-region: no-drag;
+}
+
+.quick-find-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 10px;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+  -webkit-app-region: no-drag;
+}
+
+.quick-find-results::-webkit-scrollbar {
+  width: 6px;
+}
+
+.quick-find-results::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.quick-find-loading {
+  padding: 9px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+}
+
+.quick-find-item {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(255, 255, 255, 0.84);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.quick-find-item:hover,
+.quick-find-item.selected {
+  border-color: rgba(192, 230, 253, 0.32);
+  background: rgba(192, 230, 253, 0.13);
+}
+
+.quick-find-type {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.11);
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 11px;
+}
+
+.quick-find-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quick-find-main strong {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-find-main small {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-find-reason {
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 11px;
+  white-space: nowrap;
+}

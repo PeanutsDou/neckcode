@@ -46,6 +46,15 @@ export interface AppConfigData {
     width?: number;
     height?: number;
   };
+  quickLauncher?: {
+    enabled: boolean;
+    triggerWindowMs: number;
+    inputAutoHideMs: number;
+    panelAutoHideMs: number;
+    mode: 'chat' | 'find';
+    position?: { x: number; y: number };
+    findMaxDepth?: number;
+  };
   agents: AgentConfig[];
 }
 
@@ -91,6 +100,15 @@ const defaultConfig: AppConfigData = {
   permissionMode: 'default',
   theme: 'light',
   lightScheme: 'default',
+  quickLauncher: {
+    enabled: true,
+    triggerWindowMs: 400,
+    inputAutoHideMs: 5000,
+    panelAutoHideMs: 10000,
+    mode: 'chat',
+    position: undefined,
+    findMaxDepth: 4,
+  },
   agents: [],
 };
 
@@ -113,6 +131,7 @@ function cloneDefaultConfig(): AppConfigData {
     providers: DEFAULT_PROVIDERS.map(cloneProvider),
     agent: { ...defaultConfig.agent },
     window: defaultConfig.window ? { ...defaultConfig.window } : undefined,
+    quickLauncher: defaultConfig.quickLauncher ? { ...defaultConfig.quickLauncher } : undefined,
     agents: defaultConfig.agents.map(agent => ({ ...agent, skills: [...agent.skills] })),
   };
 }
@@ -198,6 +217,28 @@ function normalizeLoadedConfig(loaded: AppConfigData): AppConfigData {
   }
   loaded.permissionMode = normalizePermissionMode(loaded.permissionMode);
   loaded.agents = normalizeAgents(loaded.agents);
+  const rawQuickLauncher: Record<string, unknown> = isRecord(loaded.quickLauncher) ? loaded.quickLauncher : {};
+  loaded.quickLauncher = {
+    enabled: typeof rawQuickLauncher.enabled === 'boolean' ? rawQuickLauncher.enabled : defaultConfig.quickLauncher!.enabled,
+    triggerWindowMs: typeof rawQuickLauncher.triggerWindowMs === 'number'
+      ? Math.max(150, Math.min(1200, rawQuickLauncher.triggerWindowMs))
+      : defaultConfig.quickLauncher!.triggerWindowMs,
+    inputAutoHideMs: typeof rawQuickLauncher.inputAutoHideMs === 'number'
+      ? Math.max(1000, Math.min(60000, rawQuickLauncher.inputAutoHideMs))
+      : defaultConfig.quickLauncher!.inputAutoHideMs,
+    panelAutoHideMs: typeof rawQuickLauncher.panelAutoHideMs === 'number'
+      ? Math.max(1000, Math.min(120000, rawQuickLauncher.panelAutoHideMs))
+      : defaultConfig.quickLauncher!.panelAutoHideMs,
+    mode: rawQuickLauncher.mode === 'find' ? 'find' : 'chat',
+    position: isRecord(rawQuickLauncher.position)
+      && typeof rawQuickLauncher.position.x === 'number'
+      && typeof rawQuickLauncher.position.y === 'number'
+      ? { x: rawQuickLauncher.position.x, y: rawQuickLauncher.position.y }
+      : undefined,
+    findMaxDepth: typeof rawQuickLauncher.findMaxDepth === 'number'
+      ? Math.max(1, Math.min(8, rawQuickLauncher.findMaxDepth))
+      : defaultConfig.quickLauncher!.findMaxDepth,
+  };
 
   const providerForActiveModel = loaded.providers.find(p => p.models.some(m => m.name === loaded.activeModel));
   if (!loaded.providers.some(p => p.id === loaded.activeProvider)) {
