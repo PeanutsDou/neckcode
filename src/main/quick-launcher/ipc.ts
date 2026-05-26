@@ -2,18 +2,22 @@ import { ipcMain } from 'electron';
 import {
   getQuickLauncherState,
   hideQuickLauncher,
+  resizeQuickLauncher,
   setQuickLauncherExpanded,
   setQuickLauncherMode,
   showQuickLauncher,
   toggleQuickLauncher,
 } from './window';
 import { quickFindLocalSearch, quickFindOpen } from './find';
+import { initRecentFiles } from './recent-files';
 
 let registered = false;
 
 export function setupQuickLauncherIpc(): void {
   if (registered) return;
   registered = true;
+
+  initRecentFiles();
 
   ipcMain.handle('quick-launcher:show', () => {
     showQuickLauncher();
@@ -37,13 +41,12 @@ export function setupQuickLauncherIpc(): void {
     setQuickLauncherExpanded(Boolean(expanded));
   });
 
-  ipcMain.handle('quick-find:local-search', async (_event, query: string) => {
-    return quickFindLocalSearch(String(query || ''), { limit: 8 });
+  ipcMain.handle('quick-launcher:resize', (_event, height: number) => {
+    resizeQuickLauncher(Number(height) || 44);
   });
 
-  ipcMain.handle('quick-find:agent-search', async (_event, query: string) => {
-    // Phase 5 fallback keeps the same safe, local-only boundary but searches slightly deeper.
-    return quickFindLocalSearch(String(query || ''), { maxDepth: 6, limit: 12 });
+  ipcMain.handle('quick-find:local-search', async (_event, query: string) => {
+    return quickFindLocalSearch(String(query || ''), { limit: 8 });
   });
 
   ipcMain.handle('quick-find:open', async (_event, path: string, reveal?: boolean) => {

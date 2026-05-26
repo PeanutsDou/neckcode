@@ -37,9 +37,9 @@ export function startQuickLauncherHotkey(onTrigger: () => void): void {
     const cfg = getConfig().quickLauncher;
     if (cfg?.enabled === false) return;
     const now = Date.now();
-    const triggerWindowMs = cfg?.triggerWindowMs || 400;
+    const triggerWindowMs = cfg?.triggerWindowMs || 500;
     const withinDoubleTap = now - lastCtrlDownAt <= triggerWindowMs;
-    const outsideTriggerCooldown = now - lastTriggeredAt > 500;
+    const outsideTriggerCooldown = now - lastTriggeredAt > 300;
     lastCtrlDownAt = now;
     if (withinDoubleTap && outsideTriggerCooldown) {
       lastTriggeredAt = now;

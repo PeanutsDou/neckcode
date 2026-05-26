@@ -124,7 +124,15 @@ export function showQuickLauncher(): void {
   win.show();
   win.focus();
   setTimeout(() => {
-    if (!win.isDestroyed()) win.webContents.send('quick-launcher:shown');
+    if (!win.isDestroyed()) {
+      win.webContents.send('quick-launcher:shown');
+      // 推送当前主题
+      const cfg = getConfig();
+      win.webContents.executeJavaScript(`
+        document.documentElement.setAttribute('data-theme', '${cfg.theme || 'light'}');
+        document.documentElement.setAttribute('data-light-scheme', '${cfg.lightScheme || 'default'}');
+      `).catch(() => {});
+    }
   }, 20);
 }
 
@@ -170,6 +178,20 @@ export function setQuickLauncherExpanded(expanded: boolean): void {
     y: bounds.y,
     width: nextWidth,
     height: nextHeight,
+  }, true);
+}
+
+export function resizeQuickLauncher(height: number): void {
+  const win = getQuickLauncherWindow();
+  if (!win) return;
+  if (win.isDestroyed()) return;
+  const bounds = win.getBounds();
+  const h = Math.max(44, Math.min(600, Math.round(height)));
+  win.setBounds({
+    x: bounds.x,
+    y: bounds.y,
+    width: 480,
+    height: h,
   }, true);
 }
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './quick-launcher.css';
 
@@ -77,6 +77,7 @@ function findResultType(result: QuickFindResult): '文件' | '目录' {
 }
 
 function findResultReason(result: QuickFindResult): string {
+  if (result.source === 'recent') return '最近打开';
   if (result.source === 'workspace') return '工作区';
   if (result.source === 'desktop') return '桌面';
   if (result.source === 'downloads') return '下载';
@@ -98,9 +99,12 @@ function QuickLauncherApp() {
   const [notice, setNotice] = useState('');
   const [findResults, setFindResults] = useState<QuickFindResult[]>([]);
   const [findLoading, setFindLoading] = useState(false);
-  const [selectedFindIndex, setSelectedFindIndex] = useState(0);
+  const [selectedFindIndex, setSelectedFindIndex] = useState(-1);
+  const [agentSearched, setAgentSearched] = useState(false);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const findScrollRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const visibleRef = useRef(false);
@@ -116,19 +120,36 @@ function QuickLauncherApp() {
 
   const resetAutoHide = useCallback(() => {
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    // 以下情况不自动隐藏：Agent 运行中、展开且有内容（对话/检索结果）
+    if (loading || findLoading) return;
+    if (expanded && (entries.length > 0 || findResults.length > 0 || streamingText)) return;
     const delay = expanded ? panelAutoHideMs : inputAutoHideMs;
     hideTimerRef.current = window.setTimeout(() => {
-      if (mode === 'find' && findResults.length > 0) return;
-      if (!loading) hide();
+      hide();
     }, delay);
-  }, [expanded, findResults.length, hide, inputAutoHideMs, loading, mode, panelAutoHideMs]);
+  }, [expanded, entries.length, findLoading, findResults.length, hide, inputAutoHideMs, loading, mode, panelAutoHideMs, streamingText]);
 
   const show = useCallback(() => {
     visibleRef.current = true;
     setVisible(true);
-    window.setTimeout(() => inputRef.current?.focus(), 30);
     resetAutoHide();
+    // 立即尝试聚焦
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      setTimeout(() => inputRef.current?.focus(), 50);
+    });
   }, [resetAutoHide]);
+
+  // 每次窗口显示时自动聚焦输入框
+  useLayoutEffect(() => {
+    if (visible) {
+      // 多次尝试聚焦，覆盖各种渲染时序
+      const focus = () => inputRef.current?.focus();
+      focus();
+      const ids = [10, 40, 100, 200].map(ms => setTimeout(focus, ms));
+      return () => ids.forEach(clearTimeout);
+    }
+  }, [visible]);
 
   const noteActivity = useCallback(() => {
     if (visibleRef.current) resetAutoHide();
@@ -149,7 +170,8 @@ function QuickLauncherApp() {
   const switchMode = useCallback((next: LauncherMode) => {
     setMode(next);
     window.electronAPI?.quickLauncherSetMode?.(next).catch(() => {});
-    setSelectedFindIndex(0);
+    setSelectedFindIndex(-1);
+    setAgentSearched(false);
     noteActivity();
   }, [noteActivity]);
 
@@ -223,10 +245,12 @@ function QuickLauncherApp() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      // Alt 键切换 Chat/Find 模式（不在展开状态，不与 Alt 组合键冲突）
       if (expanded) return;
-      event.preventDefault();
-      switchMode(mode === 'chat' ? 'find' : 'chat');
+      if (event.key === 'Alt' && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+        event.preventDefault();
+        switchMode(mode === 'chat' ? 'find' : 'chat');
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -236,23 +260,53 @@ function QuickLauncherApp() {
     noteActivity();
   }, [input, noteActivity]);
 
+  // AI 输出结束后重新启动自动隐藏计时器
+  // 与主界面主题实时同步
+  useEffect(() => {
+    const apply = (t: string, ls?: string) => {
+      document.documentElement.setAttribute('data-theme', t);
+      if (ls) document.documentElement.setAttribute('data-light-scheme', ls);
+    };
+    window.electronAPI?.getConfig?.().then((c: any) => {
+      if (c) apply(c.theme || 'light', c.lightScheme);
+    }).catch(() => {});
+    // 监听主窗口推送的主题变更
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === 'theme-changed') {
+        apply(e.data.theme, e.data.lightScheme);
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const prevLoadingRef = useRef(loading);
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading) {
+      resetAutoHide();
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, resetAutoHide]);
+
   useEffect(() => {
     if (mode !== 'find') return;
     const text = input.trim();
     if (!text) {
       setFindResults([]);
       setFindLoading(false);
-      setSelectedFindIndex(0);
+      setSelectedFindIndex(-1);
+      setAgentSearched(false);
       return;
     }
     let cancelled = false;
     setFindLoading(true);
+    setAgentSearched(false);
     const timer = window.setTimeout(() => {
       window.electronAPI?.quickFindLocalSearch?.(text)
         .then(results => {
           if (cancelled) return;
           setFindResults(Array.isArray(results) ? results : []);
-          setSelectedFindIndex(0);
+          setSelectedFindIndex(-1);
         })
         .catch(() => {
           if (!cancelled) setFindResults([]);
@@ -267,10 +321,15 @@ function QuickLauncherApp() {
     };
   }, [input, mode]);
 
+  // Find 结果出现时自动展开窗口以显示下方列表
   useEffect(() => {
     if (mode !== 'find') return;
-    if ((findLoading || findResults.length > 0) && !expanded) {
+    if (findResults.length > 0 && !expanded) {
       setExpandedMode(true);
+    }
+    // 结果清空且不在加载中 → 收回长条
+    if (findResults.length === 0 && !findLoading && expanded) {
+      setExpandedMode(false);
     }
   }, [expanded, findLoading, findResults.length, mode, setExpandedMode]);
 
@@ -292,17 +351,21 @@ function QuickLauncherApp() {
     const text = input.trim();
     if (!text) return;
     if (mode === 'find') {
-      const selected = findResults[selectedFindIndex];
-      if (selected) {
-        await openFindResult(selected);
+      // 用户通过上下键或鼠标选择了具体条目 → 打开
+      if (selectedFindIndex >= 0 && findResults[selectedFindIndex]) {
+        await openFindResult(findResults[selectedFindIndex]);
         return;
       }
+      // 没有选中（首次 Enter 或无结果）→ 触发 Agent 检索，结果回填列表
+      if (findLoading) return;
       setFindLoading(true);
+      setAgentSearched(true);
       const results = await window.electronAPI?.quickFindAgentSearch?.(text).catch(() => []);
-      setFindResults(Array.isArray(results) ? results : []);
-      setSelectedFindIndex(0);
+      const list = Array.isArray(results) ? results : [];
+      setFindResults(list);
+      setSelectedFindIndex(list.length > 0 ? 0 : -1);
       setFindLoading(false);
-      if (!results || results.length === 0) showNotice('没有找到匹配的文件或目录');
+      if (list.length === 0) showNotice('没有找到匹配的文件或目录');
       return;
     }
     if (loading) {
@@ -315,7 +378,7 @@ function QuickLauncherApp() {
     if (result && result.ok === false) {
       showNotice(result.error === 'BUSY' ? '当前回复还在进行中。' : '发送失败');
     }
-  }, [findResults, input, loading, mode, openFindResult, selectedFindIndex, setExpandedMode, showNotice]);
+  }, [findResults, findLoading, input, loading, mode, openFindResult, selectedFindIndex, setExpandedMode, showNotice]);
 
   const clear = useCallback(() => {
     window.electronAPI?.quickChatClear?.();
@@ -339,16 +402,29 @@ function QuickLauncherApp() {
       hide();
       return;
     }
-    if (!expanded && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-      event.preventDefault();
-      switchMode(mode === 'chat' ? 'find' : 'chat');
-      return;
-    }
     if (mode === 'find' && findResults.length > 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
       setSelectedFindIndex(prev => {
-        const next = event.key === 'ArrowDown' ? prev + 1 : prev - 1;
-        return (next + findResults.length) % findResults.length;
+        let next: number;
+        if (event.key === 'ArrowDown') {
+          // 向下：-1→0, 最后一项→-1(脱离), 其他+1
+          if (prev < 0) next = 0;
+          else if (prev >= findResults.length - 1) next = -1;
+          else next = prev + 1;
+        } else {
+          // 向上：-1→最后一项, 0→-1(脱离), 其他-1
+          if (prev < 0) next = findResults.length - 1;
+          else if (prev === 0) next = -1;
+          else next = prev - 1;
+        }
+        // 自动滚动
+        if (next >= 0) {
+          setTimeout(() => {
+            const el = findScrollRef.current?.children[next] as HTMLElement | undefined;
+            el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }, 20);
+        }
+        return next;
       });
       return;
     }
@@ -381,15 +457,34 @@ function QuickLauncherApp() {
       {chatExpanded && (
         <div className="quick-chat-messages" ref={scrollRef}>
           {entries.map(entry => (
-            <div key={entry.id} className={`quick-msg ${entry.role}`}>
-              {entry.role === 'tool' ? (
-                <>
-                  <div className="quick-tool-name">Tool · {entry.toolName}</div>
-                  {entry.toolArgs && <pre>{entry.toolArgs}</pre>}
-                  {entry.toolResult && <pre>{entry.toolResult}</pre>}
-                </>
-              ) : entry.content}
-            </div>
+            entry.role === 'tool' ? (
+              <div key={entry.id} className="quick-msg tool">
+                <div
+                  className="quick-tool-header"
+                  onClick={() => setExpandedTools(prev => {
+                    const next = new Set(prev);
+                    next.has(entry.id) ? next.delete(entry.id) : next.add(entry.id);
+                    return next;
+                  })}
+                >
+                  <span className="quick-tool-toggle">{expandedTools.has(entry.id) ? '▾' : '▸'}</span>
+                  <span className="quick-tool-name">🔧 {entry.toolName}</span>
+                  {entry.toolArgs && !expandedTools.has(entry.id) && (
+                    <span className="quick-tool-args">{entry.toolArgs.slice(0, 80)}</span>
+                  )}
+                </div>
+                {expandedTools.has(entry.id) && (
+                  <div className="quick-tool-body">
+                    {entry.toolArgs && <pre className="quick-tool-section">输入：{entry.toolArgs}</pre>}
+                    {entry.toolResult && <pre className="quick-tool-section">输出：{entry.toolResult}</pre>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div key={entry.id} className={`quick-msg ${entry.role}`}>
+                {entry.content}
+              </div>
+            )
           ))}
           {streamingText && <div className="quick-msg assistant streaming">{streamingText}</div>}
         </div>
@@ -417,15 +512,22 @@ function QuickLauncherApp() {
           placeholder={mode === 'chat' ? '向 DeepSeek Code 提问...' : '搜索并打开文件或目录...'}
           spellCheck={false}
         />
-        <button className="quick-send-btn" type="button" onClick={send} disabled={loading && mode === 'chat'}>
-          {mode === 'chat' ? '发送' : findLoading ? '检索中' : '打开'}
+        <button className="quick-send-btn" type="button" onClick={send} disabled={(loading && mode === 'chat') || (mode === 'find' && findLoading)}>
+          {mode === 'chat' ? '发送' : findLoading ? '检索中' : selectedFindIndex >= 0 ? '打开' : '检索'}
         </button>
-        {!expanded && <div className="quick-phase-badge">Phase 7</div>}
+        <span className={`quick-launcher-spark ${(loading || findLoading) ? 'active' : ''}`} />
+        {!expanded && <div className="quick-phase-badge" />}
       </div>
 
       {mode === 'find' && (findResults.length > 0 || findLoading) && (
-        <div className="quick-find-results">
-          {findLoading && <div className="quick-find-loading">正在检索最近文件和工作区...</div>}
+        <div className="quick-find-results" ref={findScrollRef}>
+          {findLoading && <div className="quick-find-loading">{agentSearched ? '正在让 Agent 检索...' : '正在检索最近文件和工作区...'}</div>}
+          {!findLoading && agentSearched && findResults.length === 0 && (
+            <div className="quick-find-loading">Agent 未找到匹配，请输入更具体的信息</div>
+          )}
+          {!findLoading && agentSearched && findResults.length > 0 && (
+            <div className="quick-find-loading" style={{ color: 'rgba(192,230,253,0.7)' }}>Agent 检索结果（↑↓ 选择，Enter 打开）</div>
+          )}
           {findResults.map((result, index) => (
             <button
               key={result.path}
@@ -437,7 +539,7 @@ function QuickLauncherApp() {
               <span className="quick-find-type">{findResultType(result)}</span>
               <span className="quick-find-main">
                 <strong>{result.name}</strong>
-                <small>{result.path}</small>
+                <small>{result.path.replace(/\\/g, '/').replace(/^[A-Z]:/, '')}</small>
               </span>
               <span className="quick-find-reason">{findResultReason(result)}</span>
             </button>

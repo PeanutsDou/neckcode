@@ -5,7 +5,7 @@ import { homedir } from 'os';
 import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
-import type { Attachment, ContextStatus, Message, QueuedUserMessage } from './agent/types';
+import type { Attachment, ContextStatus, Message, QueuedUserMessage, ToolCall } from './agent/types';
 import { BLOCKING_BUFFER_TOKENS, MAX_RESERVED_OUTPUT_TOKENS, getAutoCompactThreshold } from './agent/context-manager';
 import { getConfig, setConfig, saveConfig, getActiveProvider, getAllModelNames, getModelConfig, inferModelMode, getAgents, saveAgent, deleteAgent } from './config';
 import type { AppConfigData, ProviderConfig } from './config';
@@ -118,8 +118,11 @@ function buildFullPrompt(): string {
   return parts.join('\n\n');
 }
 
+let _mainWindow: import('electron').BrowserWindow | null = null;
+export function setMainWindow(win: import('electron').BrowserWindow) { _mainWindow = win; }
+
 function getWindow() {
-  return BrowserWindow.getAllWindows()[0];
+  return _mainWindow && !_mainWindow.isDestroyed() ? _mainWindow : null;
 }
 
 function emitRunStatus(sessionId: string, status: RunStatusEvent): void {
@@ -796,6 +799,131 @@ export function setupIpcHandlers(
     getWindow()?.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('session-saved'))").catch(() => {});
     emitQuick('quick-chat:saved', { sessionId: id });
     return { ok: true, sessionId: id };
+  });
+
+  // ── QuickFind Agent 语义检索（轻量专用，每次独立上下文）──
+  const FIND_SESSION = '__quick_find__';
+  let findAbortController: AbortController | null = null;
+
+  const FIND_SYSTEM_PROMPT = `你是文件检索专家。用户用自然语言描述想找的文件或目录，你只能使用以下工具在磁盘上实际查找，绝不编造路径。
+
+工具：
+- everything_search: 全盘毫秒搜索所有 NTFS 卷，传多个关键词用空格分隔
+- list_dir: 列出目录内容
+- read_file: 读取文件内容（用于确认文件是否匹配）
+- grep: 在文件中搜索文本
+
+流程：
+1. 提取用户描述中的核心关键词（中英文都试），用 everything_search 全盘搜索
+2. 结果不够精确时用 list_dir 浏览候选目录
+3. 最终整理成 JSON 返回
+
+回复末尾必须附 JSON 块（最多 10 条）：
+\`\`\`json
+[{ "name": "名称", "path": "完整绝对路径", "isDir": true/false }]
+\`\`\``;
+
+  // 清除 Find 会话
+  ipcMain.handle('quick-find:clear', () => {
+    findAbortController?.abort();
+    findAbortController = null;
+    sessionAgents.delete(FIND_SESSION);
+    cancelPendingInteractionsForSession(FIND_SESSION, 'Find cleared');
+  });
+
+  ipcMain.handle('quick-find:agent-search', async (_event, query: string) => {
+    const text = String(query || '').trim();
+    if (!text) return [];
+    try {
+      if (!getProvider()) return [];
+
+      findAbortController?.abort();
+      findAbortController = new AbortController();
+
+      // 精简 ToolRegistry：4 个只读工具 + everything_search
+      const baseTools = getTools(FIND_SESSION);
+      const allowedTools = new Set(['list_dir', 'read_file', 'grep']);
+      const wrappedTools: ToolRegistry = {
+        getDefinitions() {
+          return [
+            ...baseTools.getDefinitions().filter(d => allowedTools.has(d.function.name)),
+            {
+              type: 'function' as const,
+              function: {
+                name: 'everything_search',
+                description: 'Instant full-disk search across ALL NTFS drives. Returns real paths. Use space-separated keywords in Chinese and/or English.',
+                parameters: {
+                  type: 'object',
+                  properties: { query: { type: 'string', description: 'Keywords separated by spaces.' } },
+                  required: ['query'],
+                },
+              },
+              readOnly: true,
+            },
+          ];
+        },
+        setRunContext(ctx: any) { baseTools.setRunContext?.(ctx); },
+        async execute(tc: ToolCall) {
+          if (tc.name === 'everything_search') {
+            const args = (() => { try { return JSON.parse(tc.argumentsText || '{}'); } catch { return {}; } })();
+            const { everythingSearch } = require('./quick-launcher/everything');
+            const results = await everythingSearch(String(args.query || ''), 30);
+            return JSON.stringify(results.map((r: { name: string; fullPath: string; isFolder: boolean }) => ({
+              name: r.name, path: r.fullPath, type: r.isFolder ? 'directory' : 'file',
+            })));
+          }
+          return baseTools.execute(tc);
+        },
+      };
+
+      // 每次独立 Agent（干净上下文，不累积历史）
+      const cfg = getConfig();
+      const agent = new AgentRuntime(
+        getProvider(getSessionModelId(FIND_SESSION)),
+        wrappedTools,
+        cfg.agent.maxTurns,
+        FIND_SYSTEM_PROMPT,
+        getContextConfig(FIND_SESSION),
+      );
+      sessionAgents.set(FIND_SESSION, agent);
+
+      const result = await agent.runUserTurn(
+        text, [],
+        {
+          onModelRequest() {},
+          onContextUpdate() {},
+          onDelta() { getQuickWindow()?.webContents.send('quick-find:delta', arguments[0]); },
+          onReasoning() {},
+          onToolStart(tc: ToolCall) { getQuickWindow()?.webContents.send('quick-find:tool', { name: tc.name, args: tc.argumentsText }); },
+          onToolResult() {},
+          onComplete() {},
+          onError() {},
+        },
+        findAbortController.signal,
+      );
+
+      const responseText = result?.text || '';
+      const jsonMatch = responseText.match(/```json\n?([\s\S]*?)\n?```/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1]);
+          if (Array.isArray(parsed)) {
+            return parsed.slice(0, 10).map((item: Record<string, unknown>, i: number) => ({
+              id: `agent_${i}`, path: String(item.path || ''), name: String(item.name || ''),
+              isDir: Boolean(item.isDir), score: 90 - i * 5, source: 'agent',
+            }));
+          }
+        } catch {}
+      }
+      const pathMatches = responseText.match(/[A-Z]:\\[^\s,}\]"'\n]+/g) || [];
+      return pathMatches.slice(0, 10).map((p: string, i: number) => ({
+        id: `agent_path_${i}`, path: p, name: p.split('\\').pop() || p,
+        isDir: !p.includes('.'), score: 70 - i * 5, source: 'agent',
+      }));
+    } catch (err: any) {
+      if (err?.message === 'Aborted') return [];
+      return [];
+    }
   });
 
   ipcMain.handle('agent:send-message', async (_event, sessionId: string, message: string, attachments: { type: string; data: string; mimeType: string }[]) => {

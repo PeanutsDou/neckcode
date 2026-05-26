@@ -1,6 +1,6 @@
 {
     "name": "deepseekcode",
-    "version": "0.3.0",
+    "version": "0.2.3",
     "description": "Desktop GUI coding assistant with multi-model support",
     "private": true,
     "main": "dist/main/index.js",
@@ -70,6 +70,7 @@
         "better-sqlite3": "^12.9.0",
         "electron-updater": "^6.8.3",
         "gpt-tokenizer": "^3.4.0",
+        "iconv-lite": "^0.7.2",
         "jsonwebtoken": "^9.0.3",
         "mermaid": "^11.14.0",
         "monaco-editor": "^0.55.1",
@@ -80,7 +81,7 @@
         "rehype-highlight": "^7.0.0",
         "remark-breaks": "^4.0.0",
         "remark-gfm": "^4.0.0",
-        "uiohook-napi": "^1.5.4",
+        "uiohook-napi": "^1.5.5",
         "ws": "^8.20.1",
         "xterm": "^5.3.0",
         "zustand": "^5.0.0"

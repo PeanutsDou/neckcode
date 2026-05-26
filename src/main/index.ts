@@ -422,12 +422,15 @@ app.whenReady().then(async () => {
   setupImIpcHandlers();
   createWindow();
   setupImIpcHandlers(mainWindow);
+  if (mainWindow) { import("./ipc-handlers").then(m => m.setMainWindow(mainWindow!)).catch(() => {}); }
   createQuickLauncherWindow();
   try {
     startQuickLauncherHotkey(toggleQuickLauncher);
   } catch (err) {
     console.warn('[QuickLauncher] global hotkey unavailable:', err);
   }
+  // Everything 全盘搜索引擎初始化（异步，不阻塞启动）
+  import('./quick-launcher/everything').then(({ initEverything }) => initEverything());
   createTray();
   setupAutoUpdater();
 
