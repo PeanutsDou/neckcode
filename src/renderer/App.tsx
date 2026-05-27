@@ -216,7 +216,7 @@ export default function App() {
         <div className="toolbar" ref={toolbarRef}>
           <div className="toolbar-left">
             <img src="./icon.png" className="toolbar-icon" alt="" />
-            <span className="toolbar-title">DeepSeek Code</span>
+            <span className="toolbar-title">Neck Code</span>
             <span className="toolbar-version" style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>v{version}</span>
           </div>
           <div className="toolbar-center" />

@@ -63,7 +63,7 @@ function buildSkillsPrompt(): string {
   lines.push('');
   lines.push('You have access to the following skills. When a user request matches a skill\'s trigger conditions, you MUST proactively invoke the relevant skill using the `invoke_skill` tool before responding. Use `list_skills` to see full skill details including when-to-use hints.');
   lines.push('');
-  lines.push('**Skill storage**: All skills, memory, and config live under `~/.deepseekcode/`. When creating or editing skills, write to `~/.deepseekcode/skills/<name>/SKILL.md`. Do NOT use `~/.claude/` paths — that is a different application.');
+  lines.push('**Neck Code skill storage**: All skills, memory, and config live under `~/.deepseekcode/`. When creating or editing skills, write to `~/.deepseekcode/skills/<name>/SKILL.md`. Do NOT use `~/.claude/` paths — that is a different application.');
 
   for (const s of available) {
     const trigger = s.whenToUse ? ` TRIGGER when: ${s.whenToUse}` : '';
@@ -1129,6 +1129,7 @@ export function setupIpcHandlers(
       lightScheme: cfg.lightScheme || 'default',
       fontScale: cfg.fontScale || 100,
       codeLeftWidth: cfg.codeLeftWidth,
+      autoLaunch: cfg.autoLaunch || false,
       quickLauncher: cfg.quickLauncher,
       baseUrl: active.baseUrl,
       deepseekApiKey: cfg.providers.find(p => p.id === 'deepseek')?.apiKey || '',

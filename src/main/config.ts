@@ -37,6 +37,7 @@ export interface AppConfigData {
   theme?: 'light' | 'dark';
   lightScheme?: string;
   closeBehavior?: 'ask' | 'tray' | 'quit';
+  autoLaunch?: boolean;
   alwaysOnTop?: boolean;
   fontScale?: number;
   codeLeftWidth?: number;
@@ -98,10 +99,11 @@ const defaultConfig: AppConfigData = {
     contextLimit: 0,
     workspaceRoot: homedir(),
   },
-  systemPrompt: 'You are a helpful coding assistant. Use tools when needed. Be concise and factual.',
+  systemPrompt: 'You are Neck Code, a helpful coding assistant. Use tools when needed. Be concise and factual.',
   permissionMode: 'default',
   theme: 'light',
   lightScheme: 'default',
+  autoLaunch: false,
   quickLauncher: {
     enabled: true,
     triggerWindowMs: 400,
@@ -220,6 +222,7 @@ function normalizeLoadedConfig(loaded: AppConfigData): AppConfigData {
     loaded.providers = DEFAULT_PROVIDERS.map(cloneProvider);
   }
   loaded.permissionMode = normalizePermissionMode(loaded.permissionMode);
+  loaded.autoLaunch = typeof loaded.autoLaunch === 'boolean' ? loaded.autoLaunch : defaultConfig.autoLaunch;
   loaded.agents = normalizeAgents(loaded.agents);
   const rawQuickLauncher: Record<string, unknown> = isRecord(loaded.quickLauncher) ? loaded.quickLauncher : {};
   loaded.quickLauncher = {

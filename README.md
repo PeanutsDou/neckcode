@@ -1,4 +1,4 @@
-# DeepSeek Code
+# Neck Code
 
 > 桌面 GUI 编程助手，支持多模型切换。基于 Electron + React + TypeScript 构建。
 
@@ -134,7 +134,7 @@ npm run dev          # Vite + tsc + Electron 同时启动
 ```bash
 npm run build        # 编译 TypeScript + Vite 打包前端
 npm run pack         # → release/win-unpacked/（免安装目录）
-npm run dist         # → release/DeepSeek Code Setup X.X.X.exe（安装包）
+npm run dist         # → release/Neck Code Setup X.X.X.exe（安装包）
 ```
 
 > 国内环境需设置镜像：

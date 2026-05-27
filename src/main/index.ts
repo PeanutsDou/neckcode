@@ -21,6 +21,29 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 const toolRegistries = new Map<string, ToolRegistry>();
 let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null;
+const APP_NAME = 'Neck Code';
+const START_HIDDEN_ARGS = new Set(['--hidden', '--background', '--tray']);
+
+app.setName(APP_NAME);
+app.setAppUserModelId('com.peanuts.neckcode');
+
+function shouldStartHidden(): boolean {
+  return process.argv.some(arg => START_HIDDEN_ARGS.has(arg));
+}
+
+async function applyAutoLaunchSetting(enabled: boolean): Promise<boolean> {
+  const value = Boolean(enabled);
+  const launchArgs = app.isPackaged ? ['--hidden'] : [app.getAppPath(), '--hidden'];
+  app.setLoginItemSettings({
+    openAtLogin: value,
+    openAsHidden: true,
+    args: value ? launchArgs : [],
+  });
+  const cfg = getConfig();
+  cfg.autoLaunch = value;
+  await saveConfig();
+  return value;
+}
 
 /* ── Auto updater ── */
 function setupAutoUpdater(): void {
@@ -97,6 +120,21 @@ ipcMain.handle('close:choice', async (_event, action: string, remember: boolean)
     (app as any).__quitting = true;
     app.quit();
   }
+});
+
+ipcMain.handle('auto-launch:get', async () => {
+  const cfg = getConfig();
+  const login = app.getLoginItemSettings();
+  const enabled = Boolean(cfg.autoLaunch ?? login.openAtLogin);
+  if (cfg.autoLaunch !== enabled) {
+    cfg.autoLaunch = enabled;
+    await saveConfig();
+  }
+  return enabled;
+});
+
+ipcMain.handle('auto-launch:set', async (_event, enabled: boolean) => {
+  return applyAutoLaunchSetting(Boolean(enabled));
 });
 
 ipcMain.handle('window:set-always-on-top', async (_event, enabled: boolean) => {
@@ -247,8 +285,9 @@ function createWindow(): void {
     height: saved?.height || Math.min(900, Math.floor(sh * 0.85)),
     minWidth: 900,
     minHeight: 600,
-    title: 'DeepSeek Code',
+    title: APP_NAME,
     icon: iconPath,
+    show: !shouldStartHidden(),
     frame: false,
     transparent: false,
     hasShadow: true,
@@ -308,18 +347,18 @@ function createTray(): void {
     : path.join(__dirname, '../../resources/icon.png');
   const trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 });
   tray = new Tray(trayIcon);
-  tray.setToolTip('DeepSeek Code');
+  tray.setToolTip(APP_NAME);
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Show',
+      label: '显示 Neck Code',
       click: () => {
         mainWindow?.show();
         mainWindow?.focus();
       },
     },
     {
-      label: 'Quit',
+      label: '退出',
       click: () => {
         (app as any).__quitting = true;
         saveWindowBounds();
@@ -347,10 +386,10 @@ async function ensureDefaultTemplates(): Promise<void> {
   const agentMd = join(base, 'AGENT.md');
   try { await fs.access(agentMd); } catch {
     await fs.mkdir(base, { recursive: true });
-    await fs.writeFile(agentMd, `# DeepSeek Code — 用户指令
+    await fs.writeFile(agentMd, `# Neck Code — 用户指令
 
 这是你的全局 AGENT.md 文件。在这里定义你的偏好、规则和工作风格，
-Agent 每次对话都会自动加载这些指令。
+Neck Code Agent 每次对话都会自动加载这些指令。
 
 ## 基本设置
 
@@ -363,6 +402,15 @@ Agent 每次对话都会自动加载这些指令。
 <!-- 在下方添加你的自定义指令 -->
 
 `, 'utf8');
+  }
+  try {
+    const current = await fs.readFile(agentMd, 'utf8');
+    const migrated = current
+      .replace(/^# DeepSeek Code — 用户指令/m, '# Neck Code — 用户指令')
+      .replace(/Agent 每次对话都会自动加载这些指令。/g, 'Neck Code Agent 每次对话都会自动加载这些指令。');
+    if (migrated !== current) await fs.writeFile(agentMd, migrated, 'utf8');
+  } catch {
+    // Best-effort migration only; never block startup on user template files.
   }
 
   // Memory index
@@ -425,6 +473,9 @@ version: 0.1.0
 
 app.whenReady().then(async () => {
   await loadConfig();
+  if (getConfig().autoLaunch) {
+    await applyAutoLaunchSetting(true);
+  }
   await ensureDefaultTemplates();
   await loadSkills(getConfig().agent.workspaceRoot);
   setupIpcHandlers(createProvider, getOrCreateTools);

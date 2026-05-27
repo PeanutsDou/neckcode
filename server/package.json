@@ -1,7 +1,7 @@
 {
-  "name": "deepseekcode-im-server",
+  "name": "neckcode-im-server",
   "version": "0.1.0",
-  "description": "DeepSeek Code IM Server",
+  "description": "Neck Code IM Server",
   "private": true,
   "main": "dist/index.js",
   "scripts": {

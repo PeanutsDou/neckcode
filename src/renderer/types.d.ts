@@ -18,6 +18,8 @@ export interface ElectronAPI {
   minimize: () => Promise<void>;
   maximize: () => Promise<void>;
   close: () => Promise<void>;
+  getAutoLaunch?: () => Promise<boolean>;
+  setAutoLaunch?: (enabled: boolean) => Promise<boolean>;
 
   // Agent events (returns unsubscribe function)
   onDelta: (cb: (sid: string, text: string) => void) => () => void;
@@ -29,7 +31,7 @@ export interface ElectronAPI {
   onError: (cb: (sid: string, error: string | AgentError) => void) => () => void;
 
   // Config
-  getConfig: () => Promise<{ model: string; models: string[]; activeProvider: string; providers: Array<{ id: string; name: string; models: string[] }>; workspaceRoot: string; maxTurns: number; maxTokens: number; baseUrl: string; theme?: 'light' | 'dark'; lightScheme?: string; fontScale?: number; codeLeftWidth?: number; quickLauncher?: { enabled: boolean; triggerWindowMs: number; inputAutoHideMs: number; panelAutoHideMs: number; mode: 'chat' | 'find'; modelId?: string; findMaxDepth?: number }; deepseekApiKey?: string; anthropicApiKey?: string }>;
+  getConfig: () => Promise<{ model: string; models: string[]; activeProvider: string; providers: Array<{ id: string; name: string; models: string[] }>; workspaceRoot: string; maxTurns: number; maxTokens: number; baseUrl: string; theme?: 'light' | 'dark'; lightScheme?: string; fontScale?: number; codeLeftWidth?: number; autoLaunch?: boolean; quickLauncher?: { enabled: boolean; triggerWindowMs: number; inputAutoHideMs: number; panelAutoHideMs: number; mode: 'chat' | 'find'; modelId?: string; findMaxDepth?: number }; deepseekApiKey?: string; anthropicApiKey?: string }>;
   setConfig: (key: string, value: unknown) => Promise<void>;
   getProviders: () => Promise<unknown[]>;
   setProvider: (config: unknown) => Promise<void>;

@@ -1,5 +1,5 @@
 {
-  "name": "deepseekcode",
+  "name": "neckcode",
   "version": "0.3.0",
   "description": "Desktop GUI coding assistant with multi-model support",
   "private": true,
@@ -22,8 +22,8 @@
     "postinstall": "npx @electron/rebuild"
   },
   "build": {
-    "appId": "com.peanuts.deepseekcode",
-    "productName": "DeepSeek Code",
+    "appId": "com.peanuts.neckcode",
+    "productName": "Neck Code",
     "directories": {
       "output": "release"
     },

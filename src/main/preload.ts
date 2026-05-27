@@ -86,6 +86,8 @@ const api = {
   close: () => ipcRenderer.invoke('window:close'),
   setAlwaysOnTop: (enabled: boolean) => ipcRenderer.invoke('window:set-always-on-top', enabled),
   getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
+  getAutoLaunch: () => ipcRenderer.invoke('auto-launch:get'),
+  setAutoLaunch: (enabled: boolean) => ipcRenderer.invoke('auto-launch:set', enabled),
 
   // QuickLauncher
   quickLauncherShow: () => ipcRenderer.invoke('quick-launcher:show'),
@@ -246,7 +248,13 @@ const api = {
     ipcRenderer.on('close:ask', listener);
     return () => ipcRenderer.removeListener('close:ask', listener);
   },
-  closeChoice: (action: string, remember: boolean) => ipcRenderer.invoke('close:choice', action, remember),
+  closeChoice: (action: string, remember: boolean, autoLaunch?: boolean) => {
+    if (typeof autoLaunch === 'boolean') {
+      return ipcRenderer.invoke('auto-launch:set', autoLaunch)
+        .then(() => ipcRenderer.invoke('close:choice', action, remember));
+    }
+    return ipcRenderer.invoke('close:choice', action, remember);
+  },
 
   // Auto-update  // IM
   imConnect: (serverUrl?: string) => ipcRenderer.invoke('im:connect', serverUrl),

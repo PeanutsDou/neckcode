@@ -55,7 +55,7 @@ export function LoginPage() {
     <div style={pageStyle}>
       <section style={cardStyle}>
         <div style={{ marginBottom: 26 }}>
-          <div style={eyebrowStyle}>DeepSeek Code</div>
+          <div style={eyebrowStyle}>Neck Code</div>
           <h2 style={titleStyle}>IM 通讯</h2>
           <p style={descStyle}>登录后可进行好友检索、请求处理和一对一消息同步。</p>
         </div>

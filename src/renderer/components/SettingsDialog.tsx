@@ -54,6 +54,7 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [balance, setBalance] = useState<BalanceInfo | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [autoLaunch, setAutoLaunch] = useState(false);
   const [quickLauncher, setQuickLauncher] = useState<QuickLauncherSettings>({
     enabled: true,
     triggerWindowMs: 400,
@@ -73,6 +74,8 @@ export function SettingsDialog({ open, onClose }: Props) {
       const cfg = await window.electronAPI.getConfig() as any;
       const list = cfg.providers || [];
       setProviderList(list.map((p: any) => ({ id: p.id, name: p.name, models: Array.isArray(p.models) ? p.models.map((m: any) => typeof m === 'string' ? m : m.name) : [] })));
+      setAutoLaunch(Boolean(cfg.autoLaunch));
+      window.electronAPI.getAutoLaunch?.().then((enabled: boolean) => setAutoLaunch(Boolean(enabled))).catch(() => {});
       const quick = cfg.quickLauncher || {};
       setQuickLauncher({
         enabled: quick.enabled !== false,
@@ -89,6 +92,12 @@ export function SettingsDialog({ open, onClose }: Props) {
     const next = { ...quickLauncher, ...patch };
     setQuickLauncher(next);
     await window.electronAPI.setConfig('quickLauncher', next);
+  };
+
+  const updateAutoLaunch = async (enabled: boolean) => {
+    setAutoLaunch(enabled);
+    const actual = await window.electronAPI.setAutoLaunch?.(enabled).catch(() => !enabled);
+    if (typeof actual === 'boolean') setAutoLaunch(actual);
   };
 
   const inferModelMode = (name: string): 'text' | 'multimodal' => {
@@ -320,6 +329,17 @@ export function SettingsDialog({ open, onClose }: Props) {
                 ))}
               </div>
               <button className="btn btn-send" onClick={startNew} style={{ width: '100%', marginTop: 8 }}>＋ 添加供应商</button>
+              <div className="quick-settings-card">
+                <div className="quick-settings-title">启动</div>
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={autoLaunch}
+                    onChange={e => void updateAutoLaunch(e.target.checked)}
+                  />
+                  开机自启动（后台启动并最小化到托盘）
+                </label>
+              </div>
               <div className="quick-settings-card">
                 <div className="quick-settings-title">QuickLauncher</div>
                 <label className="settings-check">

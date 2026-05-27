@@ -155,7 +155,7 @@ export function EditorPanel() {
     return (
       <div className="editor-empty">
         <div className="editor-empty-text">
-          <h3>DeepSeek Code</h3>
+          <h3>Neck Code</h3>
           <p>Open a file from the left panel to start editing</p>
           <p className="hint">Ctrl+S to save | Select text → right-click → Send to Chat</p>
         </div>

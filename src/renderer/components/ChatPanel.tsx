@@ -63,7 +63,7 @@ export function ChatPanel() {
       <div className="chat-messages">
         {showEmpty ? (
           <div className="chat-empty">
-            <h2>DeepSeek Code</h2>
+            <h2>Neck Code</h2>
             <p>输入你的问题开始对话</p>
           </div>
         ) : (
