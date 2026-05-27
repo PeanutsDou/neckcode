@@ -1,31 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface UseSpeechInputOptions {
-  /** 收到转写结果后的回调，delta 是增量文本 */
   onResult: (delta: string) => void;
-  /** 是否启用（窗口可见时才激活） */
   enabled?: boolean;
 }
 
 interface UseSpeechInputReturn {
-  /** 是否正在录音 */
   listening: boolean;
-  /** 录音中转为 final 的文本 */
   finalText: string;
 }
 
 const SpeechRecognitionAPI =
   (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
+const HOLD_THRESHOLD = 300; // ms，按住超过此时间才触发录音
+
 export function useSpeechInput({ onResult, enabled = true }: UseSpeechInputOptions): UseSpeechInputReturn {
   const [listening, setListening] = useState(false);
   const [finalText, setFinalText] = useState('');
   const recognitionRef = useRef<any>(null);
   const listeningRef = useRef(false);
+  const holdTimerRef = useRef<number | null>(null);
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
 
-  // 初始化 recognition 实例（单例，复用）
   const getRecognition = useCallback(() => {
     if (!recognitionRef.current && SpeechRecognitionAPI) {
       const rec = new SpeechRecognitionAPI() as any;
@@ -55,7 +53,7 @@ export function useSpeechInput({ onResult, enabled = true }: UseSpeechInputOptio
 
       rec.onerror = (event: any) => {
         if (event.error === 'no-speech' || event.error === 'aborted') {
-          // 正常情况，忽略
+          // 正常
         } else {
           console.warn('[Speech]', event.error);
         }
@@ -86,7 +84,7 @@ export function useSpeechInput({ onResult, enabled = true }: UseSpeechInputOptio
       setListening(true);
       setFinalText('');
     } catch {
-      // 可能已经在录音中
+      // 可能已在录音中
     }
   }, [enabled, getRecognition]);
 
@@ -100,27 +98,51 @@ export function useSpeechInput({ onResult, enabled = true }: UseSpeechInputOptio
     setListening(false);
   }, []);
 
-  // Q 键按下开始，松开停止
+  // Q 键：按下开始计时，300ms 后触发录音；松开 <300ms 则正常输入 Q
   useEffect(() => {
     if (!enabled) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'q' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat) {
-        // 仅当不在输入框内打字时触发（不在 textarea/input 中，或按住不放）
-        const tag = (e.target as HTMLElement)?.tagName;
-        if (tag === 'TEXTAREA' || tag === 'INPUT') {
-          // 输入框内：Q 键正常输入，只有当长按（>300ms）时才录音
-          // 长按判断较复杂，这里简单地：如果 Q 键按下时输入框没有焦点或内容为空，也录音
-          const el = e.target as HTMLTextAreaElement | HTMLInputElement;
-          if (el.value.length > 0) return; // 有内容时不抢 Q 键
-        }
-        e.preventDefault();
+      if (e.key !== 'q' || e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
+
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag !== 'TEXTAREA' && tag !== 'INPUT') return;
+
+      // 阻止浏览器默认输入 Q
+      e.preventDefault();
+
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+
+      holdTimerRef.current = window.setTimeout(() => {
+        holdTimerRef.current = null;
         start();
-      }
+      }, HOLD_THRESHOLD);
     };
+
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'q' && listeningRef.current) {
-        e.preventDefault();
+      if (e.key !== 'q') return;
+
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag !== 'TEXTAREA' && tag !== 'INPUT') return;
+
+      if (holdTimerRef.current) {
+        // 短按（<300ms）：手动插入 q
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+        const el = e.target as HTMLTextAreaElement | HTMLInputElement;
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? el.value.length;
+        const newVal = el.value.slice(0, start) + 'q' + el.value.slice(end);
+        // 触发 React onChange
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value'
+        )?.set ?? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+        if (nativeInputValueSetter) {
+          nativeInputValueSetter.call(el, newVal);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        el.setSelectionRange(start + 1, start + 1);
+      } else if (listeningRef.current) {
         stop();
       }
     };
@@ -130,6 +152,7 @@ export function useSpeechInput({ onResult, enabled = true }: UseSpeechInputOptio
     return () => {
       window.removeEventListener('keydown', onKeyDown, { capture: true });
       window.removeEventListener('keyup', onKeyUp, { capture: true });
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
     };
   }, [enabled, start, stop]);
 
