@@ -503,3 +503,28 @@ body,
   font-size: 11px;
   white-space: nowrap;
 }
+
+/*  ’≤ÿ–«∫≈∞¥≈• */
+.quick-fav-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.quick-fav-btn:hover {
+  border-color: color-mix(in srgb, var(--border, #888) 40%, transparent);
+  background: color-mix(in srgb, var(--bg-hover, #fff) 30%, transparent);
+  color: #f0c040;
+}
+.quick-fav-btn.active {
+  color: #f0c040;
+}

@@ -739,6 +739,25 @@ export function createToolRegistry(
       return await webFetch(url);
     },
 
+
+    async everything_search(args) {
+      const query = String(args.query || '');
+      if (!query.trim()) return 'ERROR: query is required';
+      try {
+        const { everythingSearch, isEverythingAvailable, initEverything } = require('../quick-launcher/everything');
+        if (!isEverythingAvailable()) await initEverything();
+        if (!isEverythingAvailable()) return 'Everything SDK is not available (non-NTFS volume or service not running)';
+        const results = await everythingSearch(query.trim(), 30);
+        if (results.length === 0) return 'No files or directories matched the search query.';
+        return JSON.stringify(results.map((r: any) => ({
+          name: r.name, path: r.fullPath, type: r.isFolder ? 'directory' : 'file',
+          size: r.size, modified: r.modified?.toISOString(),
+        })), null, 2);
+      } catch (err) {
+        return 'ERROR: Everything search failed: ' + (err instanceof Error ? err.message : String(err));
+      }
+    },
+
     async web_search(args) {
       const query = String(args.query || '');
       return await webSearch(query);

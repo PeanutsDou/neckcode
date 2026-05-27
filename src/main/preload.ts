@@ -158,9 +158,11 @@ const api = {
     ipcRenderer.on('quick-chat:save-error', listener);
     return () => { ipcRenderer.removeListener('quick-chat:save-error', listener); };
   },
-  quickFindLocalSearch: (query: string) => ipcRenderer.invoke('quick-find:local-search', query),
+  quickFindLocalSearch: (query: string, favoritesList?: string[]) => ipcRenderer.invoke('quick-find:local-search', query, favoritesList),
   quickFindAgentSearch: (query: string) => ipcRenderer.invoke('quick-find:agent-search', query),
   quickFindOpen: (path: string, reveal?: boolean) => ipcRenderer.invoke('quick-find:open', path, reveal),
+  clipboardWrite: (text: string) => ipcRenderer.invoke('clipboard:write', text),
+  clipboardWrite: (text: string) => ipcRenderer.invoke('clipboard:write', text),
 
   // Terminal
   startTerminal: () => ipcRenderer.invoke('terminal:start'),
@@ -294,6 +296,5 @@ const api = {
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
 };
-
 contextBridge.exposeInMainWorld('electronAPI', api);
 console.log('[preload] electronAPI exposed');

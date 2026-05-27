@@ -55,6 +55,7 @@ export interface AppConfigData {
     modelId?: string;
     position?: { x: number; y: number };
     findMaxDepth?: number;
+    favorites?: string[];
   };
   agents: AgentConfig[];
 }
@@ -110,6 +111,7 @@ const defaultConfig: AppConfigData = {
     modelId: 'deepseek-v4-flash',
     position: undefined,
     findMaxDepth: 4,
+    favorites: [],
   },
   agents: [],
 };

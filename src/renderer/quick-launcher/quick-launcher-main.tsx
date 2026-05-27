@@ -31,6 +31,7 @@ interface QuickFindResult {
   score: number;
   source?: string;
   mtimeMs?: number;
+  favorite?: boolean;
 }
 
 declare global {
@@ -59,6 +60,9 @@ declare global {
       quickFindLocalSearch?: (query: string) => Promise<QuickFindResult[]>;
       quickFindAgentSearch?: (query: string) => Promise<QuickFindResult[]>;
       quickFindOpen?: (path: string, reveal?: boolean) => Promise<{ ok?: boolean; error?: string }>;
+      getConfig?: () => Promise<{ quickLauncher?: { favorites?: string[] } }>;
+      setConfig?: (key: string, value: unknown) => Promise<void>;
+      clipboardWrite?: (text: string) => Promise<void>;
     };
   }
 }
@@ -85,6 +89,7 @@ function findResultReason(result: QuickFindResult): string {
   if (result.source === 'desktop') return '桌面';
   if (result.source === 'downloads') return '下载';
   if (result.source === 'documents') return '文档';
+  if (result.source === 'favorite') return '已收藏';
   return `${Math.round(result.score)} 分`;
 }
 
@@ -107,12 +112,29 @@ function QuickLauncherApp() {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [savingSession, setSavingSession] = useState(false);
   const [savedSessionId, setSavedSessionId] = useState<string | null>(null);
+  const [favorites, setFavorites] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const findScrollRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const visibleRef = useRef(false);
+
+  // ─── 状态 refs（供 window-level keydown 闭包用）───
+  const expandedRef = useRef(expanded);
+  const modeRef = useRef(mode);
+  const entriesRef = useRef(entries);
+  const streamingTextRef = useRef(streamingText);
+  const findResultsRef = useRef(findResults);
+  const selectedFindIndexRef = useRef(selectedFindIndex);
+  const favoritesRef = useRef(favorites);
+  useEffect(() => { expandedRef.current = expanded; }, [expanded]);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+  useEffect(() => { streamingTextRef.current = streamingText; }, [streamingText]);
+  useEffect(() => { findResultsRef.current = findResults; }, [findResults]);
+  useEffect(() => { selectedFindIndexRef.current = selectedFindIndex; }, [selectedFindIndex]);
+  useEffect(() => { favoritesRef.current = favorites; }, [favorites]);
 
   const hide = useCallback(() => {
     if (!visibleRef.current) return;
@@ -125,14 +147,13 @@ function QuickLauncherApp() {
 
   const resetAutoHide = useCallback(() => {
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
-    // 以下情况不自动隐藏：Agent 运行中、展开且有内容（对话/检索结果）
     if (loading || findLoading) return;
     if (expanded && (entries.length > 0 || findResults.length > 0 || streamingText)) return;
     const delay = expanded ? panelAutoHideMs : inputAutoHideMs;
     hideTimerRef.current = window.setTimeout(() => {
       hide();
     }, delay);
-  }, [expanded, entries.length, findLoading, findResults.length, hide, inputAutoHideMs, loading, mode, panelAutoHideMs, streamingText]);
+  }, [expanded, entries.length, findLoading, findResults.length, hide, inputAutoHideMs, loading, panelAutoHideMs, streamingText]);
 
   const show = useCallback(() => {
     visibleRef.current = true;
@@ -147,10 +168,8 @@ function QuickLauncherApp() {
     [16, 32, 64, 120, 220, 360].forEach(ms => window.setTimeout(focusInput, ms));
   }, [resetAutoHide]);
 
-  // 每次窗口显示时自动聚焦输入框
   useLayoutEffect(() => {
     if (visible) {
-      // 多次尝试聚焦，覆盖透明窗口显示、置前和渲染恢复之间的时序差。
       const focus = () => {
         window.focus();
         inputRef.current?.focus({ preventScroll: true });
@@ -185,6 +204,36 @@ function QuickLauncherApp() {
     noteActivity();
   }, [noteActivity]);
 
+  // ─── 持久化收藏 ───
+  const persistFavorites = useCallback((next: string[]) => {
+    setFavorites(next);
+    window.electronAPI?.setConfig?.('quickLauncher', { favorites: next }).catch(() => {});
+  }, []);
+
+  const toggleFavorite = useCallback((targetPath: string) => {
+    const prev = favoritesRef.current;
+    const next = prev.includes(targetPath)
+      ? prev.filter(p => p !== targetPath)
+      : [targetPath, ...prev];
+    persistFavorites(next);
+    showNotice(prev.includes(targetPath) ? '已取消收藏' : '已收藏');
+    noteActivity();
+  }, [persistFavorites, showNotice, noteActivity]);
+
+  const copyPath = useCallback(async (path: string) => {
+    try {
+      if (window.electronAPI?.clipboardWrite) {
+        await window.electronAPI.clipboardWrite(path);
+      } else {
+        await navigator.clipboard.writeText(path);
+      }
+      showNotice('已复制路径');
+    } catch {
+      showNotice('复制失败');
+    }
+  }, [showNotice]);
+
+  // ─── 初始化 ───
   useEffect(() => {
     window.electronAPI?.quickLauncherGetState?.()
       .then(state => {
@@ -193,7 +242,15 @@ function QuickLauncherApp() {
         if (typeof state?.panelAutoHideMs === 'number') setPanelAutoHideMs(state.panelAutoHideMs);
       })
       .catch(() => {});
+    window.electronAPI?.getConfig?.()
+      .then(cfg => {
+        if (cfg?.quickLauncher?.favorites) setFavorites(cfg.quickLauncher.favorites);
+      })
+      .catch(() => {});
+  }, []);
 
+  // ─── IPC 事件订阅 ───
+  useEffect(() => {
     const api = window.electronAPI;
     const unsubs = [
       api?.onQuickLauncherShow?.(show),
@@ -263,25 +320,10 @@ function QuickLauncherApp() {
     };
   }, [setExpandedMode, show, showNotice]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      // Alt 键切换 Chat/Find 模式（不在展开状态，不与 Alt 组合键冲突）
-      if (expanded) return;
-      if (event.key === 'Alt' && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-        event.preventDefault();
-        switchMode(mode === 'chat' ? 'find' : 'chat');
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [expanded, mode, switchMode]);
+  // ─── 自动隐藏 ───
+  useEffect(() => { noteActivity(); }, [input, noteActivity]);
 
-  useEffect(() => {
-    noteActivity();
-  }, [input, noteActivity]);
-
-  // AI 输出结束后重新启动自动隐藏计时器
-  // 与主界面主题实时同步
+  // ─── 主题同步 ───
   useEffect(() => {
     const apply = (t: string, ls?: string) => {
       document.documentElement.setAttribute('data-theme', t);
@@ -290,7 +332,6 @@ function QuickLauncherApp() {
     window.electronAPI?.getConfig?.().then((c: any) => {
       if (c) apply(c.theme || 'light', c.lightScheme);
     }).catch(() => {});
-    // 监听主窗口推送的主题变更
     const handler = (e: MessageEvent) => {
       if (e.data?.type === 'theme-changed') {
         apply(e.data.theme, e.data.lightScheme);
@@ -300,14 +341,29 @@ function QuickLauncherApp() {
     return () => window.removeEventListener('message', handler);
   }, []);
 
+  // ─── AI 输出结束后重启自动隐藏 ───
   const prevLoadingRef = useRef(loading);
   useEffect(() => {
-    if (prevLoadingRef.current && !loading) {
-      resetAutoHide();
-    }
+    if (prevLoadingRef.current && !loading) resetAutoHide();
     prevLoadingRef.current = loading;
   }, [loading, resetAutoHide]);
 
+  // ─── 收藏变更时刷新搜索结果 ───
+  useEffect(() => {
+    if (mode !== 'find') return;
+    const text = input.trim();
+    if (!text) return;
+    window.electronAPI?.quickFindLocalSearch?.(text, favoritesRef.current).then(results => {
+      const merged = (results || []).map(r => ({
+        ...r,
+        favorite: favorites.includes(r.path),
+      }));
+      setFindResults(merged);
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [favorites]);
+
+  // ─── 搜索 debounce 200ms ───
   useEffect(() => {
     if (mode !== 'find') return;
     const text = input.trim();
@@ -322,40 +378,37 @@ function QuickLauncherApp() {
     setFindLoading(true);
     setAgentSearched(false);
     const timer = window.setTimeout(() => {
-      window.electronAPI?.quickFindLocalSearch?.(text)
+      window.electronAPI?.quickFindLocalSearch?.(text, favoritesRef.current)
         .then(results => {
           if (cancelled) return;
-          setFindResults(Array.isArray(results) ? results : []);
+          const merged = (results || []).map(r => ({
+            ...r,
+            favorite: favoritesRef.current.includes(r.path),
+          }));
+          setFindResults(merged);
           setSelectedFindIndex(-1);
         })
-        .catch(() => {
-          if (!cancelled) setFindResults([]);
-        })
-        .finally(() => {
-          if (!cancelled) setFindLoading(false);
-        });
-    }, 140);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+        .catch(() => { if (!cancelled) setFindResults([]); })
+        .finally(() => { if (!cancelled) setFindLoading(false); });
+    }, 200);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [input, mode]);
 
-  // Find 结果出现时自动展开窗口以显示下方列表
+  // ─── find 结果出现/消失自动展开/收起 ───
   useEffect(() => {
     if (mode !== 'find') return;
-    if (findResults.length > 0 && !expanded) {
-      setExpandedMode(true);
-    }
-    // 结果清空且不在加载中 → 收回长条
-    if (findResults.length === 0 && !findLoading && expanded) {
-      setExpandedMode(false);
-    }
+    if (findResults.length > 0 && !expanded) setExpandedMode(true);
+    if (findResults.length === 0 && !findLoading && expanded) setExpandedMode(false);
   }, [expanded, findLoading, findResults.length, mode, setExpandedMode]);
 
+  // ─── 聊天自动滚底 ───
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [entries, streamingText]);
+
+  // ═══════════════════════════════════════════════
+  // 核心操作函数
+  // ═══════════════════════════════════════════════
 
   const openFindResult = useCallback(async (result: QuickFindResult, reveal = false) => {
     const response = await window.electronAPI?.quickFindOpen?.(result.path, reveal);
@@ -371,12 +424,10 @@ function QuickLauncherApp() {
     const text = input.trim();
     if (!text) return;
     if (mode === 'find') {
-      // 用户通过上下键或鼠标选择了具体条目 → 打开
       if (selectedFindIndex >= 0 && findResults[selectedFindIndex]) {
         await openFindResult(findResults[selectedFindIndex]);
         return;
       }
-      // 没有选中（首次 Enter 或无结果）→ 触发 Agent 检索，结果回填列表
       if (findLoading) return;
       setFindLoading(true);
       setAgentSearched(true);
@@ -388,10 +439,7 @@ function QuickLauncherApp() {
       if (list.length === 0) showNotice('没有找到匹配的文件或目录');
       return;
     }
-    if (loading) {
-      showNotice('当前回复还在进行中，请稍后再发送。');
-      return;
-    }
+    if (loading) { showNotice('当前回复还在进行中，请稍后再发送。'); return; }
     setInput('');
     setExpandedMode(true);
     const result = await window.electronAPI?.quickChatSend?.(text);
@@ -404,15 +452,9 @@ function QuickLauncherApp() {
     window.electronAPI?.quickChatClear?.();
   }, []);
 
-  const close = useCallback(() => {
-    window.electronAPI?.quickChatAbort?.();
-    window.electronAPI?.quickChatClear?.();
-    hide();
-  }, [hide]);
-
   const save = useCallback(async () => {
     if (savingSession) return;
-    if (entries.length === 0 && !streamingText) {
+    if (entriesRef.current.length === 0 && !streamingTextRef.current) {
       showNotice('当前没有可保留的对话。');
       return;
     }
@@ -430,31 +472,112 @@ function QuickLauncherApp() {
       setSavingSession(false);
       showNotice(error instanceof Error ? `保留失败：${error.message}` : '保留对话失败');
     }
-  }, [entries.length, savingSession, showNotice, streamingText]);
+  }, [savingSession, showNotice]);
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+  // ═══════════════════════════════════════════════
+  // 键盘快捷键（集中管理，window-level 保证可靠性）
+  // ═══════════════════════════════════════════════
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      // 仅在窗口可见时处理
+      if (!visibleRef.current) return;
+
+      // Escape → 隐藏
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        hide();
+        return;
+      }
+
+      // ── Ctrl 键：保留对话（chat + 展开 + 有对话内容）──
+      if (event.key === 'Control' && !event.altKey && !event.shiftKey && !event.metaKey) {
+        const exp = expandedRef.current;
+        const m = modeRef.current;
+        const hasConv = entriesRef.current.length > 0 || streamingTextRef.current;
+        if (exp && m === 'chat' && hasConv) {
+          event.preventDefault();
+          save();
+        }
+        return;
+      }
+
+      // ── Alt 键 ──
+      if (event.key === 'Alt' && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+        const exp = expandedRef.current;
+        const m = modeRef.current;
+        const hasConv = entriesRef.current.length > 0 || streamingTextRef.current;
+        if (!exp) {
+          // 未展开时：切换 Chat/Find 模式
+          event.preventDefault();
+          switchMode(m === 'chat' ? 'find' : 'chat');
+        } else if (m === 'chat' && hasConv) {
+          // 展开 + chat + 有对话 → 清空
+          event.preventDefault();
+          clear();
+        }
+        return;
+      }
+
+      // ── Find 模式快捷键 ──
+      if (modeRef.current === 'find' && findResultsRef.current.length > 0) {
+        const idx = selectedFindIndexRef.current;
+        const results = findResultsRef.current;
+        const selected = idx >= 0 && results[idx] ? results[idx] : null;
+
+        // X → 收藏/取消收藏
+        if (event.key === 'x' && !event.ctrlKey && !event.altKey && !event.metaKey && selected) {
+          event.preventDefault();
+          toggleFavorite(selected.path);
+          return;
+        }
+
+        // Ctrl+C → 复制路径
+        if (event.key === 'c' && event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey && selected) {
+          event.preventDefault();
+          copyPath(selected.path);
+          return;
+        }
+      }
+
+      // Enter → 发送 / 打开
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void send();
+        return;
+      }
+    };
+
+    // 阻止 Alt 键触发菜单栏
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Alt') event.preventDefault();
+    };
+
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    window.addEventListener('keyup', onKeyUp, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, { capture: true });
+      window.removeEventListener('keyup', onKeyUp, { capture: true });
+    };
+  }, [hide, switchMode, save, clear, toggleFavorite, copyPath, send]);
+
+  // 输入框内少量辅助快捷键（仅上下键选择，因为需要 preventDefault 在 React 合成事件层面）
+  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     noteActivity();
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      hide();
-      return;
-    }
+    // 上下键选择 find 结果
     if (mode === 'find' && findResults.length > 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
       setSelectedFindIndex(prev => {
         let next: number;
         if (event.key === 'ArrowDown') {
-          // 向下：-1→0, 最后一项→-1(脱离), 其他+1
           if (prev < 0) next = 0;
           else if (prev >= findResults.length - 1) next = -1;
           else next = prev + 1;
         } else {
-          // 向上：-1→最后一项, 0→-1(脱离), 其他-1
           if (prev < 0) next = findResults.length - 1;
           else if (prev === 0) next = -1;
           else next = prev - 1;
         }
-        // 自动滚动
         if (next >= 0) {
           setTimeout(() => {
             const el = findScrollRef.current?.children[next] as HTMLElement | undefined;
@@ -463,16 +586,16 @@ function QuickLauncherApp() {
         }
         return next;
       });
-      return;
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      void send();
     }
   };
 
+  // ═══════════════════════════════════════════════
+  // 渲染
+  // ═══════════════════════════════════════════════
+
   const statusText = phaseText(status, loading);
   const chatExpanded = expanded && mode === 'chat';
+  const hasConversation = entries.length > 0 || streamingText;
 
   return (
     <div
@@ -485,10 +608,14 @@ function QuickLauncherApp() {
           <div className="quick-chat-title">Quick Chat</div>
           <div className="quick-chat-actions">
             <button type="button" onClick={save} disabled={savingSession}>
-              {savingSession ? '保留中...' : savedSessionId ? '已保留' : '保留对话'}
+              {savingSession ? '保留中...' : savedSessionId ? '已保留' : `保留对话 (Ctrl)`}
             </button>
-            <button type="button" onClick={clear}>清空</button>
-            <button type="button" onClick={close}>×</button>
+            <button type="button" onClick={clear}>{`清空 (Alt)`}</button>
+            <button type="button" onClick={() => {
+              window.electronAPI?.quickChatAbort?.();
+              window.electronAPI?.quickChatClear?.();
+              hide();
+            }}>×</button>
           </div>
         </div>
       )}
@@ -547,7 +674,7 @@ function QuickLauncherApp() {
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onFocus={noteActivity}
-          onKeyDown={onKeyDown}
+          onKeyDown={onInputKeyDown}
           placeholder={mode === 'chat' ? '向 DeepSeek Code 提问...' : '搜索并打开文件或目录...'}
           spellCheck={false}
         />
@@ -565,7 +692,7 @@ function QuickLauncherApp() {
             <div className="quick-find-loading">Agent 未找到匹配，请输入更具体的信息</div>
           )}
           {!findLoading && agentSearched && findResults.length > 0 && (
-            <div className="quick-find-loading" style={{ color: 'rgba(192,230,253,0.7)' }}>Agent 检索结果（↑↓ 选择，Enter 打开）</div>
+            <div className="quick-find-loading" style={{ color: 'rgba(192,230,253,0.7)' }}>Agent 检索结果（↑↓ 选择，Enter 打开，X 收藏，Ctrl+C 复制路径）</div>
           )}
           {findResults.map((result, index) => (
             <button
@@ -580,7 +707,17 @@ function QuickLauncherApp() {
                 <strong>{result.name}</strong>
                 <small>{result.path.replace(/\\/g, '/').replace(/^[A-Z]:/, '')}</small>
               </span>
-              <span className="quick-find-reason">{findResultReason(result)}</span>
+              <span className="quick-find-actions" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  type="button"
+                  className={`quick-fav-btn ${favorites.includes(result.path) ? 'active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); toggleFavorite(result.path); }}
+                  title={favorites.includes(result.path) ? '取消收藏 (X)' : '收藏 (X)'}
+                >
+                  {favorites.includes(result.path) ? '★' : '☆'}
+                </button>
+                <span className="quick-find-reason">{findResultReason(result)}</span>
+              </span>
             </button>
           ))}
         </div>

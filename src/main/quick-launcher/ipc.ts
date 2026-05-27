@@ -45,8 +45,8 @@ export function setupQuickLauncherIpc(): void {
     resizeQuickLauncher(Number(height) || 44);
   });
 
-  ipcMain.handle('quick-find:local-search', async (_event, query: string) => {
-    return quickFindLocalSearch(String(query || ''), { limit: 8 });
+  ipcMain.handle('quick-find:local-search', async (_event, query: string, favoritesList?: string[]) => {
+    return quickFindLocalSearch(String(query || ''), favoritesList, { limit: 8 });
   });
 
   ipcMain.handle('quick-find:open', async (_event, path: string, reveal?: boolean) => {

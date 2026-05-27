@@ -931,6 +931,26 @@ export function setupIpcHandlers(
         findAbortController.signal,
       );
 
+      // 先检查收藏列表是否有匹配（0 延迟）
+      const favorites = getConfig().quickLauncher?.favorites || [];
+      const favResults: Array<{ id: string; path: string; name: string; isDir: boolean; score: number; source: string }> = [];
+      if (favorites.length > 0) {
+        const lowerText = text.toLowerCase();
+        for (const fav of favorites) {
+          const favLower = fav.toLowerCase();
+          const name = fav.split('\\').pop() || fav;
+          if (favLower.includes(lowerText) || name.toLowerCase().includes(lowerText)) {
+            try { require('fs').accessSync(fav); } catch { continue; }
+            const stat = require('fs').statSync(fav);
+            favResults.push({
+              id: fav, path: fav, name,
+              isDir: stat.isDirectory(),
+              score: 999, source: 'favorite',
+            });
+          }
+        }
+      }
+
       const responseText = result?.text || '';
       const jsonMatch = responseText.match(/```json\n?([\s\S]*?)\n?```/);
       if (jsonMatch) {

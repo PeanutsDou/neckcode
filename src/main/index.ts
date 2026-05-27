@@ -112,6 +112,12 @@ ipcMain.handle('window:get-always-on-top', async () => {
   return mainWindow?.isAlwaysOnTop() || Boolean(getConfig().alwaysOnTop);
 });
 
+// Clipboard write (for QuickLauncher Ctrl+C)
+ipcMain.handle('clipboard:write', async (_event, text: string) => {
+  const { clipboard } = require('electron');
+  clipboard.writeText(String(text));
+});
+
 function createProvider(modelOverride?: string, options?: { stream?: boolean; maxTokens?: number }): Provider {
   const cfg = getConfig();
   const model = modelOverride || cfg.activeModel;
