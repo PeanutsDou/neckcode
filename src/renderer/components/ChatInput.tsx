@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/app-store';
 import { CustomSelect } from './CustomSelect';
 import { PermissionToggle } from './PermissionToggle';
 import { inferImageMimeType } from '../utils/attachments';
+import { useSpeechInput } from '../hooks/useSpeechInput';
 
 interface SlashCommand {
   name: string;
@@ -56,6 +57,7 @@ export function ChatInput() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const cmdListRef = useRef<HTMLDivElement>(null);
   const [queuedCount, setQueuedCount] = useState(0);
+  const speech = useSpeechInput({ onResult: (delta) => setText(prev => prev + delta), enabled: true });
   const { addEntryTo, setStreamingTo, setPendingContext, focusVersion } = useChatStore();
   const isStreaming = useActiveIsStreaming();
   const pendingContext = useActivePendingContext();
@@ -314,10 +316,15 @@ export function ChatInput() {
         )}
         <textarea ref={inputRef} className="chat-input" value={text}
           onChange={handleChange} onKeyDown={handleKeyDown} onPaste={handlePaste}
-          placeholder="输入消息，Enter 发送，/ 命令"
+          placeholder="输入消息，Enter 发送，Q 语音，/ 命令"
           style={{ height: inputHeight }} />
 
         <div className="input-controls">
+          {speech.listening ? (
+            <span className="speech-indicator" title="正在录音... 松开 Q 停止" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '0 8px', height: 28, borderRadius: 999, border: '1px solid var(--accent)', background: 'color-mix(in srgb, var(--accent) 20%, transparent)', color: 'var(--accent)', fontSize: 12, cursor: 'default' }}>🎤 {speech.finalText.slice(-15) || '...'}</span>
+          ) : (
+            <button className="speech-btn" title="按住 Q 开始录音 (Q)" onClick={() => {}} style={{ width: 28, height: 28, border: '1px solid var(--border)', borderRadius: 999, background: 'transparent', color: 'var(--text-muted)', fontSize: 14, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>🎤</button>
+          )}
           <PermissionToggle />
           <CustomSelect
             value={currentModel}

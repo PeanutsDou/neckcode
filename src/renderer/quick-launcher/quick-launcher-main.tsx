@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '../styles/global.css';
 import '../styles/dark.css';
 import './quick-launcher.css';
+import { useSpeechInput } from '../hooks/useSpeechInput';
 
 type LauncherMode = 'chat' | 'find';
 type QuickRole = 'user' | 'assistant' | 'tool';
@@ -680,6 +681,11 @@ function QuickLauncherApp() {
           placeholder={mode === 'chat' ? '提问... Ctrl+Enter 分析文件  📋 分析剪贴板' : '搜索文件... ↑↓选择 Enter打开 Ctrl+Enter 智能分析'}
           spellCheck={false}
         />
+        {speech.listening ? (
+          <span className="quick-speech-ind" title="录音中... 松开 Q">🎤</span>
+        ) : (
+          <button className="quick-send-btn quick-speech-btn" type="button" title="按住 Q 语音输入" onClick={() => {}} style={{ padding: '0 6px', fontSize: 14 }}>🎤</button>
+        )}
         <button className="quick-send-btn quick-clip-btn" type="button" onClick={async () => {
     const clip = await window.electronAPI?.clipboardRead?.();
     if (!clip || !clip.trim()) { showNotice('剪贴板为空'); return; }
