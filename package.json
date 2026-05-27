@@ -1,6 +1,6 @@
 {
   "name": "deepseekcode",
-  "version": "0.3.0",
+  "version": "0.2.3",
   "description": "Desktop GUI coding assistant with multi-model support",
   "private": true,
   "main": "dist/main/index.js",
@@ -47,7 +47,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "publish": {
       "provider": "generic",
