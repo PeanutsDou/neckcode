@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import '../styles/global.css';
 import '../styles/dark.css';
 import './quick-launcher.css';
-import { useSpeechInput } from '../hooks/useSpeechInput';
 
 type LauncherMode = 'chat' | 'find';
 type QuickRole = 'user' | 'assistant' | 'tool';
@@ -64,7 +63,6 @@ declare global {
       getConfig?: () => Promise<{ quickLauncher?: { favorites?: string[] } }>;
       setConfig?: (key: string, value: unknown) => Promise<void>;
       clipboardWrite?: (text: string) => Promise<void>;
-      clipboardRead?: () => Promise<string>;
       quickFindReadFile?: (path: string) => Promise<{ ok?: boolean; content?: string; size?: number; error?: string }>;
     };
   }
@@ -122,7 +120,6 @@ function QuickLauncherApp() {
   const hideTimerRef = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const visibleRef = useRef(false);
-
   // ─── 状态 refs（供 window-level keydown 闭包用）───
   const expandedRef = useRef(expanded);
   const modeRef = useRef(mode);
@@ -493,19 +490,6 @@ function QuickLauncherApp() {
         return;
       }
 
-      // ── Ctrl 键：保留对话（chat + 展开 + 有对话内容）──
-      if (event.key === 'Control' && !event.altKey && !event.shiftKey && !event.metaKey) {
-        const exp = expandedRef.current;
-        const m = modeRef.current;
-        const hasConv = entriesRef.current.length > 0 || streamingTextRef.current;
-        if (exp && m === 'chat' && hasConv) {
-          event.preventDefault();
-          save();
-        }
-        return;
-      }
-
-      // ── Alt 键 ──
       if (event.key === 'Alt' && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
         const exp = expandedRef.current;
         const m = modeRef.current;
@@ -611,7 +595,7 @@ function QuickLauncherApp() {
           <div className="quick-chat-title">Quick Chat</div>
           <div className="quick-chat-actions">
             <button type="button" onClick={save} disabled={savingSession}>
-              {savingSession ? '保留中...' : savedSessionId ? '已保留' : `保留对话 (Ctrl)`}
+              {savingSession ? 'Saving...' : savedSessionId ? 'Saved' : 'Save'}
             </button>
             <button type="button" onClick={clear}>{`清空 (Alt)`}</button>
             <button type="button" onClick={() => {
@@ -678,22 +662,10 @@ function QuickLauncherApp() {
           onChange={(event) => setInput(event.target.value)}
           onFocus={noteActivity}
           onKeyDown={onInputKeyDown}
-          placeholder={mode === 'chat' ? '提问... Ctrl+Enter 分析文件  📋 分析剪贴板' : '搜索文件... ↑↓选择 Enter打开 Ctrl+Enter 智能分析'}
+          placeholder={mode === 'chat' ? '提问...' : '搜索文件...'}
           spellCheck={false}
         />
-        {speech.listening ? (
-          <span className="quick-speech-ind" title="录音中... 松开 Q">🎤</span>
-        ) : (
-          <button className="quick-send-btn quick-speech-btn" type="button" title="按住 Q 语音输入" onClick={() => {}} style={{ padding: '0 6px', fontSize: 14 }}>🎤</button>
-        )}
-        <button className="quick-send-btn quick-clip-btn" type="button" onClick={async () => {
-    const clip = await window.electronAPI?.clipboardRead?.();
-    if (!clip || !clip.trim()) { showNotice('剪贴板为空'); return; }
-    setInput('');
-    setExpandedMode(true);
-    window.electronAPI?.quickChatSend?.(`分析这段内容:\n\n${clip.slice(0, 8000)}`);
-  }} title="分析剪贴板内容">📋</button>
-  <button className="quick-send-btn" type="button" onClick={send} disabled={(loading && mode === 'chat') || (mode === 'find' && findLoading)}>
+        <button className="quick-send-btn" type="button" onClick={send} disabled={(loading && mode === 'chat') || (mode === 'find' && findLoading)}>
           {mode === 'chat' ? '发送' : findLoading ? '检索中' : selectedFindIndex >= 0 ? '打开' : '检索'}
         </button>
         <span className={`quick-launcher-spark ${(loading || findLoading) ? 'active' : ''}`} />
