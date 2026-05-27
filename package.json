@@ -1,105 +1,105 @@
 {
-    "name": "deepseekcode",
-    "version": "0.2.3",
-    "description": "Desktop GUI coding assistant with multi-model support",
-    "private": true,
-    "main": "dist/main/index.js",
-    "scripts": {
-        "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
-        "dev:local-im": "concurrently \"npm run server\" \"npm run dev:main\" \"npm run dev:renderer\"",
-        "dev:main": "npm run build:main && node node_modules/electron/cli.js .",
-        "dev:renderer": "node node_modules/vite/bin/vite.js --config config/vite.config.ts",
-        "build:main": "tsc -p config/tsconfig.main.json",
-        "build:renderer": "node node_modules/vite/bin/vite.js build --config config/vite.config.ts",
-        "build:server": "tsc -p server/tsconfig.json",
-        "server": "tsx server/index.ts",
-        "server:build": "tsc -p server/tsconfig.json && node server/dist/index.js",
-        "server:test": "tsx server/scripts/smoke-test.ts",
-        "build": "npm run build:main && npm run build:renderer",
-        "start": "node node_modules/electron/cli.js .",
-        "pack": "npm run build && electron-builder --dir",
-        "dist": "npm run build && electron-builder",
-        "postinstall": "npx @electron/rebuild"
+  "name": "deepseekcode",
+  "version": "0.3.0",
+  "description": "Desktop GUI coding assistant with multi-model support",
+  "private": true,
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
+    "dev:local-im": "concurrently \"npm run server\" \"npm run dev:main\" \"npm run dev:renderer\"",
+    "dev:main": "npm run build:main && node node_modules/electron/cli.js .",
+    "dev:renderer": "node node_modules/vite/bin/vite.js --config config/vite.config.ts",
+    "build:main": "tsc -p config/tsconfig.main.json",
+    "build:renderer": "node node_modules/vite/bin/vite.js build --config config/vite.config.ts",
+    "build:server": "tsc -p server/tsconfig.json",
+    "server": "tsx server/index.ts",
+    "server:build": "tsc -p server/tsconfig.json && node server/dist/index.js",
+    "server:test": "tsx server/scripts/smoke-test.ts",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "node node_modules/electron/cli.js .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "postinstall": "npx @electron/rebuild"
+  },
+  "build": {
+    "appId": "com.peanuts.deepseekcode",
+    "productName": "DeepSeek Code",
+    "directories": {
+      "output": "release"
     },
-    "build": {
-        "appId": "com.peanuts.deepseekcode",
-        "productName": "DeepSeek Code",
-        "directories": {
-            "output": "release"
-        },
-        "files": [
-            "dist/**/*",
-            "resources/**/*",
-            "package.json"
-        ],
-        "extraResources": [
-            {
-                "from": "resources/",
-                "to": "resources/"
-            }
-        ],
-        "win": {
-            "icon": "resources/icon.ico",
-            "target": [
-                {
-                    "target": "nsis",
-                    "arch": [
-                        "x64"
-                    ]
-                }
-            ]
-        },
-        "publish": {
-            "provider": "generic",
-            "url": "http://111.229.84.47/deepseekcode/"
-        },
-        "asarUnpack": [
-            "node_modules/better-sqlite3/**",
-            "node_modules/uiohook-napi/**",
-            "node_modules/mermaid/**"
-        ],
-        "nsis": {
-            "oneClick": false,
-            "allowToChangeInstallationDirectory": true
+    "files": [
+      "dist/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/",
+        "to": "resources/"
+      }
+    ],
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
         }
+      ]
     },
-    "dependencies": {
-        "@anthropic-ai/sdk": "^0.95.1",
-        "@monaco-editor/react": "^4.7.0",
-        "@xterm/addon-fit": "^0.11.0",
-        "better-sqlite3": "^12.10.0",
-        "electron-updater": "^6.8.3",
-        "gpt-tokenizer": "^3.4.0",
-        "iconv-lite": "^0.7.2",
-        "jsonwebtoken": "^9.0.3",
-        "mermaid": "^11.14.0",
-        "monaco-editor": "^0.55.1",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
-        "react-markdown": "^9.0.0",
-        "react-virtuoso": "^4.18.7",
-        "rehype-highlight": "^7.0.0",
-        "remark-breaks": "^4.0.0",
-        "remark-gfm": "^4.0.0",
-        "uiohook-napi": "^1.5.5",
-        "ws": "^8.20.1",
-        "xterm": "^5.3.0",
-        "zustand": "^5.0.0"
+    "publish": {
+      "provider": "generic",
+      "url": "http://111.229.84.47/deepseekcode/"
     },
-    "devDependencies": {
-        "@electron/rebuild": "^4.0.4",
-        "@types/better-sqlite3": "^7.6.13",
-        "@types/jsonwebtoken": "^9.0.10",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "@types/ws": "^8.18.1",
-        "@vitejs/plugin-react": "^4.0.0",
-        "concurrently": "^9.0.0",
-        "electron": "^33.0.0",
-        "electron-builder": "^26.8.1",
-        "rcedit": "^5.0.1",
-        "tsx": "^4.22.3",
-        "typescript": "^5.7.0",
-        "vite": "^6.0.0"
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**",
+      "node_modules/uiohook-napi/**",
+      "node_modules/mermaid/**"
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
+    "@monaco-editor/react": "^4.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "better-sqlite3": "^12.10.0",
+    "electron-updater": "^6.8.3",
+    "gpt-tokenizer": "^3.4.0",
+    "iconv-lite": "^0.7.2",
+    "jsonwebtoken": "^9.0.3",
+    "mermaid": "^11.14.0",
+    "monaco-editor": "^0.55.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^9.0.0",
+    "react-virtuoso": "^4.18.7",
+    "rehype-highlight": "^7.0.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.0",
+    "uiohook-napi": "^1.5.5",
+    "ws": "^8.20.1",
+    "xterm": "^5.3.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.0.0",
+    "concurrently": "^9.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^26.8.1",
+    "rcedit": "^5.0.1",
+    "tsx": "^4.22.3",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
 }
