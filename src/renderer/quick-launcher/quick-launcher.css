@@ -348,7 +348,7 @@ body,
   outline: 0;
   background: transparent;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
   -webkit-app-region: no-drag;
 }
 
@@ -504,7 +504,7 @@ body,
   white-space: nowrap;
 }
 
-/* �ղ��ǺŰ�ť */
+/* �ղ��ǺŰ�ť */
 .quick-fav-btn {
   width: 22px;
   height: 22px;
@@ -528,3 +528,5 @@ body,
 .quick-fav-btn.active {
   color: #f0c040;
 }
+
+.quick-clip-btn { font-size: 13px; padding: 0 8px; min-width: 28px; }

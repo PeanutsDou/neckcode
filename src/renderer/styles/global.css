@@ -456,6 +456,42 @@ html, body {
   position: relative;
 }
 
+.chat-main,
+.chat-panel,
+.chat-messages,
+.chat-messages-virtuoso,
+.chat-messages-virtuoso [data-virtuoso-scroller],
+.chat-messages-virtuoso [data-viewport-type],
+.virtual-message-row,
+.virtual-message-row *,
+.virtual-message-footer,
+.virtual-message-footer *,
+.msg-outer,
+.msg-outer *,
+.message,
+.message-content,
+.message-content *,
+.message-tool,
+.message-tool *,
+.streaming-text,
+.streaming-text * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -webkit-app-region: no-drag !important;
+}
+
+.message-actions,
+.message-actions *,
+.error-actions,
+.error-actions *,
+.tool-card-header,
+.tool-card-header *,
+.message-expand-btn,
+.message-expand-btn * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
 .chat-main::before {
   content: '';
   position: absolute;
@@ -892,11 +928,15 @@ html, body {
   min-height: 0;
   overflow: hidden;
   padding: 0;
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .chat-messages-virtuoso {
   height: 100%;
   width: 100%;
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .virtual-message-row {
@@ -904,6 +944,8 @@ html, body {
   flex-direction: column;
   box-sizing: border-box;
   padding: 6px 20px;
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .virtual-message-footer {
@@ -963,6 +1005,8 @@ html, body {
   line-height: 1.6;
   font-size: 13.5px;
   width: 100%;
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .message-actions {
@@ -1059,6 +1103,8 @@ html, body {
 
 .message-content {
   color: var(--text-primary);
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .message-content p {
@@ -1078,6 +1124,8 @@ html, body {
   font-family: var(--font-mono);
   font-size: 12px;
   margin: 6px 0;
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .message-content code {
@@ -1087,6 +1135,8 @@ html, body {
   padding: 1px 5px;
   border-radius: 3px;
   color: var(--text-primary);
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .message-content pre code {
@@ -1240,6 +1290,8 @@ html, body {
   align-self: stretch;
   max-width: 100%;
   font-size: 12px;
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 /* ===== Streaming spark ===== */
@@ -3193,6 +3245,8 @@ html, body {
 
 .tool-card {
   margin-top: 3px;
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .tool-card-header {
@@ -3251,6 +3305,8 @@ html, body {
   max-height: 200px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
+  user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .tool-card-result-preview {

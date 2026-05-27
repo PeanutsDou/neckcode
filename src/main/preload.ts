@@ -162,6 +162,8 @@ const api = {
   quickFindAgentSearch: (query: string) => ipcRenderer.invoke('quick-find:agent-search', query),
   quickFindOpen: (path: string, reveal?: boolean) => ipcRenderer.invoke('quick-find:open', path, reveal),
   clipboardWrite: (text: string) => ipcRenderer.invoke('clipboard:write', text),
+  clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
+  quickFindReadFile: (path: string) => ipcRenderer.invoke('quick-find:read-file', path),
   clipboardWrite: (text: string) => ipcRenderer.invoke('clipboard:write', text),
 
   // Terminal

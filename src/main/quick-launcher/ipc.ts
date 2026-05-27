@@ -49,6 +49,20 @@ export function setupQuickLauncherIpc(): void {
     return quickFindLocalSearch(String(query || ''), favoritesList, { limit: 8 });
   });
 
+  
+  ipcMain.handle('quick-find:read-file', async (_event, filePath: string) => {
+    try {
+      const { promises: fsp } = require('fs');
+      const stat = await fsp.stat(filePath);
+      if (stat.size > 200 * 1024) return { ok: false, error: '文件过大 (>200KB)' };
+      const content = await fsp.readFile(filePath, 'utf8');
+      return { ok: true, content, size: stat.size };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+
   ipcMain.handle('quick-find:open', async (_event, path: string, reveal?: boolean) => {
     return quickFindOpen(String(path || ''), Boolean(reveal));
   });

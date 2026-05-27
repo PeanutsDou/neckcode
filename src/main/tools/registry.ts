@@ -239,6 +239,21 @@ const DEFINITIONS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'everything_search',
+      description: 'Search local Windows files and directories using Everything. Use this for fast whole-disk filename/path searches when the user asks to find a file, folder, project, document, or recently mentioned local asset. Separate multiple keywords with spaces.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Everything search query. Use concise filename, folder, extension, or path keywords.' },
+        },
+        required: ['query'],
+      },
+    },
+    readOnly: true,
+  },
+  {
+    type: 'function',
+    function: {
       name: 'web_search',
       description: 'Search the web using DuckDuckGo. Returns titles, URLs, and snippets for up to 10 results.',
       parameters: {

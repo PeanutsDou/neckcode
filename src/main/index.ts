@@ -112,6 +112,13 @@ ipcMain.handle('window:get-always-on-top', async () => {
   return mainWindow?.isAlwaysOnTop() || Boolean(getConfig().alwaysOnTop);
 });
 
+
+// Clipboard read (for QuickLauncher clipboard agent)
+ipcMain.handle('clipboard:read', async () => {
+  const { clipboard } = require('electron');
+  return clipboard.readText();
+});
+
 // Clipboard write (for QuickLauncher Ctrl+C)
 ipcMain.handle('clipboard:write', async (_event, text: string) => {
   const { clipboard } = require('electron');

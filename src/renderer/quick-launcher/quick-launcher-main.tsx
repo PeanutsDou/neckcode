@@ -63,6 +63,8 @@ declare global {
       getConfig?: () => Promise<{ quickLauncher?: { favorites?: string[] } }>;
       setConfig?: (key: string, value: unknown) => Promise<void>;
       clipboardWrite?: (text: string) => Promise<void>;
+      clipboardRead?: () => Promise<string>;
+      quickFindReadFile?: (path: string) => Promise<{ ok?: boolean; content?: string; size?: number; error?: string }>;
     };
   }
 }
@@ -559,7 +561,7 @@ function QuickLauncherApp() {
       window.removeEventListener('keydown', onKeyDown, { capture: true });
       window.removeEventListener('keyup', onKeyUp, { capture: true });
     };
-  }, [hide, switchMode, save, clear, toggleFavorite, copyPath, send]);
+  }, [hide, switchMode, save, clear, toggleFavorite, copyPath, send, showNotice, setInput, setExpandedMode]);
 
   // 输入框内少量辅助快捷键（仅上下键选择，因为需要 preventDefault 在 React 合成事件层面）
   const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -675,10 +677,17 @@ function QuickLauncherApp() {
           onChange={(event) => setInput(event.target.value)}
           onFocus={noteActivity}
           onKeyDown={onInputKeyDown}
-          placeholder={mode === 'chat' ? '向 DeepSeek Code 提问...' : '搜索并打开文件或目录...'}
+          placeholder={mode === 'chat' ? '提问... Ctrl+Enter 分析文件  📋 分析剪贴板' : '搜索文件... ↑↓选择 Enter打开 Ctrl+Enter 智能分析'}
           spellCheck={false}
         />
-        <button className="quick-send-btn" type="button" onClick={send} disabled={(loading && mode === 'chat') || (mode === 'find' && findLoading)}>
+        <button className="quick-send-btn quick-clip-btn" type="button" onClick={async () => {
+    const clip = await window.electronAPI?.clipboardRead?.();
+    if (!clip || !clip.trim()) { showNotice('剪贴板为空'); return; }
+    setInput('');
+    setExpandedMode(true);
+    window.electronAPI?.quickChatSend?.(`分析这段内容:\n\n${clip.slice(0, 8000)}`);
+  }} title="分析剪贴板内容">📋</button>
+  <button className="quick-send-btn" type="button" onClick={send} disabled={(loading && mode === 'chat') || (mode === 'find' && findLoading)}>
           {mode === 'chat' ? '发送' : findLoading ? '检索中' : selectedFindIndex >= 0 ? '打开' : '检索'}
         </button>
         <span className={`quick-launcher-spark ${(loading || findLoading) ? 'active' : ''}`} />
@@ -692,7 +701,7 @@ function QuickLauncherApp() {
             <div className="quick-find-loading">Agent 未找到匹配，请输入更具体的信息</div>
           )}
           {!findLoading && agentSearched && findResults.length > 0 && (
-            <div className="quick-find-loading" style={{ color: 'rgba(192,230,253,0.7)' }}>Agent 检索结果（↑↓ 选择，Enter 打开，X 收藏，Ctrl+C 复制路径）</div>
+            <div className="quick-find-loading" style={{ color: 'rgba(192,230,253,0.7)' }}>Agent 检索结果（↑↓选择 Enter打开 Ctrl+Enter分析 X收藏 Ctrl+C复制）</div>
           )}
           {findResults.map((result, index) => (
             <button
