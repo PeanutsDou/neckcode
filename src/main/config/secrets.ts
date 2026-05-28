@@ -1,10 +1,11 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { legacyUserDataDir, userDataDir } from '../app-paths';
 
 const ALGO = 'aes-256-gcm';
-const KEY_FILE = join(homedir(), '.deepseekcode', '.key');
+const KEY_FILE = join(userDataDir(), '.key');
+const LEGACY_KEY_FILE = join(legacyUserDataDir(), '.key');
 
 let masterKey: Buffer | null = null;
 let keyGenerationError: string | null = null;
@@ -17,9 +18,18 @@ async function getKey(): Promise<Buffer> {
   } catch (err) {
     const error = err as NodeJS.ErrnoException | undefined;
     if (error?.code === 'ENOENT') {
+      try {
+        const raw = await fs.readFile(LEGACY_KEY_FILE, 'utf8');
+        masterKey = Buffer.from(raw.trim(), 'hex');
+        await fs.mkdir(userDataDir(), { recursive: true });
+        await fs.writeFile(KEY_FILE, raw.trim(), 'utf8');
+        return masterKey;
+      } catch {
+        // No readable legacy key; generate a fresh key below.
+      }
       // First-time setup: config dir doesn't exist yet, safe to generate new key
       masterKey = randomBytes(32);
-      await fs.mkdir(join(homedir(), '.deepseekcode'), { recursive: true });
+      await fs.mkdir(userDataDir(), { recursive: true });
       await fs.writeFile(KEY_FILE, masterKey.toString('hex'), 'utf8');
     } else {
       // Key file exists but cannot be read — do NOT generate a new key

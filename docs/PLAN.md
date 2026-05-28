@@ -1,4 +1,4 @@
-# DeepSeek Code — 技术规划
+# Neck Code — 技术规划
 
 ## 一、架构总览
 
@@ -144,7 +144,7 @@ Session C (project-A, qwen-max, compare mode)
 ## 四、目录结构
 
 ```
-deepseekcode/
+neckcode/
 ├── package.json
 ├── electron-builder.yml
 ├── tsconfig.json

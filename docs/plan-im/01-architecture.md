@@ -28,7 +28,7 @@
        │ WebSocket JSON                 │ WebSocket JSON
        ▼                                ▼
 ┌──────────────────────┐        ┌──────────────────────┐
-│ DeepSeek Code Client │        │ DeepSeek Code Client │
+│ Neck Code Client │        │ Neck Code Client │
 │                      │        │                      │
 │ Main Process          │        │ Main Process          │
 │  ├─ im-client         │        │  ├─ im-client         │

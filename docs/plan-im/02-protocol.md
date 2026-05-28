@@ -5,7 +5,7 @@
 
 ## 1. 目标
 
-本文定义 DeepSeek Code 客户端与 IM Server 之间的 WebSocket JSON 协议。
+本文定义 Neck Code 客户端与 IM Server 之间的 WebSocket JSON 协议。
 
 协议需要解决：
 

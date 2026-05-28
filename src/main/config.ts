@@ -4,6 +4,7 @@ import { homedir } from 'os';
 import { encrypt, decrypt } from './config/secrets';
 import type { PermissionMode } from '../shared/permissions';
 import type { AgentConfig } from '../shared/types';
+import { ensureUserDataDirMigrated, userDataDir } from './app-paths';
 
 export type ModelMode = 'text' | 'multimodal';
 
@@ -61,7 +62,7 @@ export interface AppConfigData {
   agents: AgentConfig[];
 }
 
-const CONFIG_DIR = join(homedir(), '.deepseekcode');
+const CONFIG_DIR = userDataDir();
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const CONFIG_BAK_FILE = join(CONFIG_DIR, 'config.json.bak');
 const CONFIG_TMP_FILE = join(CONFIG_DIR, 'config.json.tmp');
@@ -391,6 +392,7 @@ async function tryLoadFromFile(filePath: string): Promise<AppConfigData | null> 
 }
 
 export async function loadConfig(): Promise<AppConfigData> {
+  await ensureUserDataDirMigrated();
   await fs.mkdir(CONFIG_DIR, { recursive: true });
 
   // 1. Try primary config

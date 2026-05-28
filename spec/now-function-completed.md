@@ -86,8 +86,8 @@
 |------|------|------|
 | SKILL.md 加载 | ✅ | 多路径发现，frontmatter 解析 |
 | 内置技能 | ✅ | dsc-release |
-| 项目技能 | ✅ | workspace/.deepseekcode/skills |
-| 用户全局技能 | ✅ | ~/.deepseekcode/skills |
+| 项目技能 | ✅ | workspace/.neckcode/skills |
+| 用户全局技能 | ✅ | ~/.neckcode/skills |
 | skills:invoke IPC | ✅ | UI 触发调用 |
 | 技能管理 UI | ✅ | SkillsDialog 查看/重载 |
 
@@ -130,7 +130,7 @@
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | AGENT.md 加载 | ✅ | 多级发现（全局→项目），合并 |
-| Memory 系统 | ✅ | ~/.deepseekcode/memory/ 读写 |
+| Memory 系统 | ✅ | ~/.neckcode/memory/ 读写 |
 | Memory UI | ✅ | MemoryDialog 查看/删除 |
 
 ## 十二、发布系统

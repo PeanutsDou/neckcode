@@ -1,8 +1,8 @@
 import { promises as fs } from 'fs';
 import { join, resolve, basename } from 'path';
-import { homedir } from 'os';
 import { app } from 'electron';
 import type { Skill } from './types';
+import { APP_DATA_DIR_NAME, LEGACY_APP_DATA_DIR_NAME, legacyUserDataDir, userDataDir } from '../app-paths';
 
 async function exists(p: string): Promise<boolean> {
   try { await fs.access(p); return true; } catch { return false; }
@@ -146,12 +146,14 @@ export async function loadSkills(workspaceRoot?: string): Promise<Skill[]> {
 
   // Project skills
   if (workspaceRoot) {
-    dirs.push(join(workspaceRoot, '.deepseekcode', 'skills'));
+    dirs.push(join(workspaceRoot, APP_DATA_DIR_NAME, 'skills'));
+    dirs.push(join(workspaceRoot, LEGACY_APP_DATA_DIR_NAME, 'skills'));
     dirs.push(join(workspaceRoot, 'skills'));
   }
 
   // User global skills
-  dirs.push(join(homedir(), '.deepseekcode', 'skills'));
+  dirs.push(join(userDataDir(), 'skills'));
+  dirs.push(join(legacyUserDataDir(), 'skills'));
 
   const results = await Promise.all(dirs.map(d => loadSkillsFromPath(d)));
   const byName = new Map<string, Skill>();

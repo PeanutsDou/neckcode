@@ -18,7 +18,7 @@ import * as iconv from 'iconv-lite';
 // === 路径配置 ===
 const PROJECT_ROOT = app.isPackaged
   ? join(process.resourcesPath, 'app.asar.unpacked')
-  : app.getAppPath(); // dev 模式下就是项目根 D:\AR\deepseekcode
+  : app.getAppPath(); // dev 模式下就是项目根 D:\AR\neckcode
 
 const EVERYTHING_DIR = join(PROJECT_ROOT, 'everything');
 const ES_EXE = join(EVERYTHING_DIR, 'es.exe');

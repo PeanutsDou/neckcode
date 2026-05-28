@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs';
-import { homedir } from 'os';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { repairToolCallMessages } from './agent/session';
+import { APP_DB_FILE_NAME, LEGACY_APP_DB_FILE_NAME, legacyUserDataDir, userDataDir } from './app-paths';
 
 export interface SessionData {
   id: string;
@@ -51,11 +51,20 @@ interface SessionGroupRow {
 let db: Database.Database | null = null;
 
 function dataDir(): string {
-  return join(homedir(), '.deepseekcode');
+  return userDataDir();
 }
 
 function legacySessionsDir(): string {
   return join(dataDir(), 'sessions');
+}
+
+function ensureLegacyDbCopied(): void {
+  const nextDb = join(dataDir(), APP_DB_FILE_NAME);
+  if (existsSync(nextDb)) return;
+  const legacyDb = join(legacyUserDataDir(), LEGACY_APP_DB_FILE_NAME);
+  if (!existsSync(legacyDb)) return;
+  mkdirSync(dataDir(), { recursive: true });
+  copyFileSync(legacyDb, nextDb);
 }
 
 function parseArrayJson(value: string | null): unknown[] {
@@ -90,7 +99,8 @@ export function getDb(): Database.Database {
   if (db) return db;
 
   mkdirSync(dataDir(), { recursive: true });
-  db = new Database(join(dataDir(), 'deepseekcode.db'));
+  ensureLegacyDbCopied();
+  db = new Database(join(dataDir(), APP_DB_FILE_NAME));
   db.pragma('journal_mode = WAL');
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (

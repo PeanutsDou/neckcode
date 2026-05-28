@@ -1,7 +1,6 @@
 ﻿import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { promises as fs } from 'fs';
 import { dirname, resolve, join } from 'path';
-import { homedir } from 'os';
 import { spawn, type ChildProcess } from 'child_process';
 import { AgentRuntime, type Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
@@ -30,6 +29,7 @@ import {
   type SessionData,
 } from './session-store';
 import { getQuickLauncherWindow, syncQuickLauncherTheme } from './quick-launcher/window';
+import { APP_DATA_DIR_NAME, LEGACY_APP_DATA_DIR_NAME, legacyUserDataDir, userDataDir } from './app-paths';
 
 let agentMdContent = '';
 let agentMdFiles: string[] = [];
@@ -63,7 +63,7 @@ function buildSkillsPrompt(): string {
   lines.push('');
   lines.push('You have access to the following skills. When a user request matches a skill\'s trigger conditions, you MUST proactively invoke the relevant skill using the `invoke_skill` tool before responding. Use `list_skills` to see full skill details including when-to-use hints.');
   lines.push('');
-  lines.push('**Neck Code skill storage**: All skills, memory, and config live under `~/.deepseekcode/`. When creating or editing skills, write to `~/.deepseekcode/skills/<name>/SKILL.md`. Do NOT use `~/.claude/` paths — that is a different application.');
+  lines.push('**Neck Code skill storage**: All skills, memory, and config live under `~/.neckcode/`. When creating or editing skills, write to `~/.neckcode/skills/<name>/SKILL.md`. Do NOT use `~/.claude/` paths — that is a different application.');
 
   for (const s of available) {
     const trigger = s.whenToUse ? ` TRIGGER when: ${s.whenToUse}` : '';
@@ -1483,8 +1483,10 @@ export function setupIpcHandlers(
   ipcMain.handle('memory:list', async () => {
     const { resolve } = require('path');
     const memDirs = [
-      join(getConfig().agent.workspaceRoot, '.deepseekcode', 'memory'),
-      join(homedir(), '.deepseekcode', 'memory'),
+      join(getConfig().agent.workspaceRoot, APP_DATA_DIR_NAME, 'memory'),
+      join(getConfig().agent.workspaceRoot, LEGACY_APP_DATA_DIR_NAME, 'memory'),
+      join(userDataDir(), 'memory'),
+      join(legacyUserDataDir(), 'memory'),
     ];
     // Deduplicate
     const seen = new Set<string>();

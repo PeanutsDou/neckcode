@@ -52,7 +52,7 @@
     },
     "publish": {
       "provider": "generic",
-      "url": "http://111.229.84.47/deepseekcode/"
+      "url": "http://111.229.84.47/neckcode/"
     },
     "asarUnpack": [
       "node_modules/better-sqlite3/**",

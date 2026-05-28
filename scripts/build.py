@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""DeepSeek Code 打包脚本 — 自动设置国内镜像"""
+"""Neck Code 打包脚本 — 自动设置国内镜像"""
 import subprocess, os, sys
 
-os.chdir(r'D:\AR\deepseekcode')
+os.chdir(r'D:\AR\neckcode')
 env = os.environ.copy()
 env['ELECTRON_MIRROR'] = 'https://npmmirror.com/mirrors/electron/'
 env['ELECTRON_BUILDER_BINARIES_MIRROR'] = 'https://npmmirror.com/mirrors/electron-builder-binaries/'

@@ -20,7 +20,7 @@ Phase 1 有两类数据库：
 | 数据库 | 位置 | 职责 |
 | --- | --- | --- |
 | 服务端 DB | IM Server 配置路径 | 用户、好友关系、消息权威存储 |
-| 客户端 DB | `~/.deepseekcode/deepseekcode.db` | 登录态、好友、消息本地缓存 |
+| 客户端 DB | `~/.neckcode/neckcode.db` | 登录态、好友、消息本地缓存 |
 
 规则：
 
@@ -116,7 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_dm_to_delivered ON direct_messages(to_user, deliv
 
 ## 4. 客户端本地数据库
 
-客户端复用现有 `~/.deepseekcode/deepseekcode.db`。现有 `sessions` 表不改动，只新增 IM 表。
+客户端复用现有 `~/.neckcode/neckcode.db`。现有 `sessions` 表不改动，只新增 IM 表。
 
 ### 4.1 im_local_user
 

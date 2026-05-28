@@ -212,7 +212,7 @@
 
 风险：
 
-- 复用 `deepseekcode.db` 时锁冲突。
+- 复用 `neckcode.db` 时锁冲突。
 - token 暴露给 Renderer。
 - IPC 参数未校验。
 

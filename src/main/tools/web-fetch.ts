@@ -47,7 +47,7 @@ export async function webFetch(urlStr: string): Promise<string> {
   try {
     const res = await fetch(urlStr, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'DeepSeekCode/0.1' },
+      headers: { 'User-Agent': 'NeckCode/0.1' },
       redirect: 'follow',
     });
 

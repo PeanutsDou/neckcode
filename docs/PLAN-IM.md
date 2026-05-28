@@ -4,7 +4,7 @@
 
 > 版本：0.1.0  
 > 状态：规划中  
-> 依赖：DeepSeek Code master
+> 依赖：Neck Code master
 
 ---
 
@@ -12,7 +12,7 @@
 
 ### 1.1 目标
 
-在 DeepSeek Code（桌面 AI Agent 应用）基础上，新增即时通讯能力，最终演进为 **多人共享 AI Agent 的协作空间**。
+在 Neck Code（桌面 AI Agent 应用）基础上，新增即时通讯能力，最终演进为 **多人共享 AI Agent 的协作空间**。
 
 ### 1.2 分阶段路线
 
@@ -82,7 +82,7 @@ Phase 2 — 群组 Agent 协作（后续规划）
 ### 2.3 与现有系统关系
 
 ```
-DeepSeek Code 主进程
+Neck Code 主进程
   ├── Agent 会话 ── IPC ── Renderer（现有，不动）
   └── IM 模块 ──── WS ──── IM Server ──── 其他客户端
        │
@@ -138,7 +138,7 @@ CREATE INDEX idx_dm_to_delivered ON direct_messages(to_user, delivered_at);
 
 ### 3.2 客户端存储（扩展）
 
-客户端 SQLite（`deepseekcode.db`）新增：
+客户端 SQLite（`neckcode.db`）新增：
 
 ```sql
 -- 已登录用户信息缓存
@@ -352,7 +352,7 @@ src/renderer/
 ### 6.4 启动流程
 
 ```
-DeepSeek Code 启动
+Neck Code 启动
   → 读 local_user，有缓存 token → auth.token 尝试重连
     ├── 成功 → 进入主界面，IM 已连接
     └── 失败/过期 → 显示登录页

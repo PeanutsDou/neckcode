@@ -16,12 +16,13 @@ import { createQuickLauncherWindow, destroyQuickLauncherWindow, toggleQuickLaunc
 import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import type { ConfirmRequest } from '../shared/types';
+import { APP_BRAND_NAME, APP_DATA_DIR_NAME, userDataDir } from './app-paths';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 const toolRegistries = new Map<string, ToolRegistry>();
 let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null;
-const APP_NAME = 'Neck Code';
+const APP_NAME = APP_BRAND_NAME;
 const START_HIDDEN_ARGS = new Set(['--hidden', '--background', '--tray']);
 
 app.setName(APP_NAME);
@@ -379,8 +380,7 @@ function createTray(): void {
 async function ensureDefaultTemplates(): Promise<void> {
   const { promises: fs } = require('fs');
   const { join } = require('path');
-  const { homedir } = require('os');
-  const base = join(homedir(), '.deepseekcode');
+  const base = userDataDir();
 
   // AGENT.md
   const agentMd = join(base, 'AGENT.md');
@@ -406,7 +406,7 @@ Neck Code Agent 每次对话都会自动加载这些指令。
   try {
     const current = await fs.readFile(agentMd, 'utf8');
     const migrated = current
-      .replace(/^# DeepSeek Code — 用户指令/m, '# Neck Code — 用户指令')
+      .replace(new RegExp(`^# ${'DeepSeek'} ${'Code'} — 用户指令`, 'm'), '# Neck Code — 用户指令')
       .replace(/Agent 每次对话都会自动加载这些指令。/g, 'Neck Code Agent 每次对话都会自动加载这些指令。');
     if (migrated !== current) await fs.writeFile(agentMd, migrated, 'utf8');
   } catch {
@@ -445,7 +445,7 @@ Neck Code Agent 每次对话都会自动加载这些指令。
 每个技能是一个子目录，目录名即为技能名，目录内包含一个 SKILL.md 文件：
 
 \`\`\`
-~/.deepseekcode/skills/
+~/${APP_DATA_DIR_NAME}/skills/
   my-skill/
     SKILL.md
 \`\`\`

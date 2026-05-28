@@ -10,8 +10,8 @@
 
 | 方式 | 说明 |
 |------|------|
-| 📦 [下载安装包](https://github.com/PeanutsDou/deepseekcode/releases/latest) | 双击安装，自动更新 |
-| 🚀 [国内加速](https://ghproxy.com/https://github.com/PeanutsDou/deepseekcode/releases/latest) | GitHub 访问慢时使用 |
+| 📦 [下载安装包](https://github.com/PeanutsDou/neckcode/releases/latest) | 双击安装，自动更新 |
+| 🚀 [国内加速](https://ghproxy.com/https://github.com/PeanutsDou/neckcode/releases/latest) | GitHub 访问慢时使用 |
 | 🛠 源码运行 | `git clone` → `npm install` → `npm run dev` |
 
 **系统要求**：Windows 10/11 · Node.js 18+（仅源码运行需要）
@@ -51,13 +51,13 @@
 
 技能存放位置：
 - **内置** — `skills/`，随应用发布
-- **项目级** — `<工作区>/.deepseekcode/skills/`
-- **用户全局** — `~/.deepseekcode/skills/`
+- **项目级** — `<工作区>/.neckcode/skills/`
+- **用户全局** — `~/.neckcode/skills/`
 
 ### 记忆 & AGENT.md
 
-- **AGENT.md** — `~/.deepseekcode/AGENT.md` 自动注入 System Prompt
-- **记忆系统** — `~/.deepseekcode/memory/` 持久化键值记忆，Agent 可读写
+- **AGENT.md** — `~/.neckcode/AGENT.md` 自动注入 System Prompt
+- **记忆系统** — `~/.neckcode/memory/` 持久化键值记忆，Agent 可读写
 
 ### 自动更新
 
@@ -93,12 +93,12 @@
 
 ## 安装后配置
 
-所有用户数据在 `~/.deepseekcode/`：
+所有用户数据在 `~/.neckcode/`：
 
 ```
-~/.deepseekcode/
+~/.neckcode/
 ├── config.json      # 供应商、模型、偏好
-├── deepseekcode.db  # 会话（SQLite）
+├── neckcode.db  # 会话（SQLite）
 ├── .key             # API Key 加密密钥
 ├── AGENT.md         # 全局指令
 ├── memory/          # 记忆文件
@@ -123,8 +123,8 @@
 ### 源码运行
 
 ```bash
-git clone https://github.com/PeanutsDou/deepseekcode.git
-cd deepseekcode
+git clone https://github.com/PeanutsDou/neckcode.git
+cd neckcode
 npm install
 npm run dev          # Vite + tsc + Electron 同时启动
 ```

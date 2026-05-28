@@ -1,4 +1,4 @@
-# DeepSeek Code — 需求文档
+# Neck Code — 需求文档
 
 ## 一、项目定位
 
@@ -262,4 +262,4 @@
 3. **语音识别**：本地模型（SenseVoiceSmall）还是云端 API？
 4. **是否内置 Git Source Control 面板**？还是仅通过 AI 对话操作 Git？
 5. **是否需要远程连接能力**（Bridge / Remote SSH）？
-6. **项目名称**：DeepSeek Code 还是其他？
+6. **项目名称**：Neck Code 还是其他？
