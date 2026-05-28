@@ -32,7 +32,7 @@ from urllib import request, error
 API_KEY   = "sk-fe2779230ca44d54ae075fc8d7eb9e36"
 API_URL   = "https://api.deepseek.com/v1/chat/completions"
 MODEL     = "deepseek-v4-flash"
-WORKSPACE = Path(__file__).resolve().parent  # agent.py 所在目录即为工作区
+WORKSPACE = Path(__file__).resolve().parent
 
 # ═══════════════════════════════════════════════
 # 工具定义（注册给 LLM 的 tool schema）
@@ -110,38 +110,39 @@ class Agent:
     """Neck Agent 运行时。管理对话历史、工具执行、API 调用。"""
 
     def __init__(self):
-        # 对话历史：system prompt + 用户消息 + assistant 回复 + 工具结果
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     # ─── API 调用（流式）─────────────────────────────
 
     def call_api_stream(self):
         """
-        调用 DeepSeek API，流式返回文本增量。
-        同时收集完整的 tool_calls 数据，存到 self._stream_tool_calls。
+        调用 DeepSeek API，流式 yield 文本增量。
+        同时收集 reasoning_content 和 tool_calls，存入 self。
         """
         body = json.dumps({
             "model": MODEL,
             "messages": self.messages,
             "tools": TOOLS,
             "stream": True,
-        }).encode()
+        }).encode("utf-8")
 
         req = request.Request(API_URL, body, {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {API_KEY}",
         })
 
-        full_content = ""   # 累积的完整文本
+        full_content = ""   # 累积的完整回复文本
         tool_calls = []     # 累积的工具调用
+        reasoning = ""      # 累积的思考内容（thinking mode）
+        reasoning_ended = False  # 思考阶段是否已结束
 
         try:
             with request.urlopen(req, timeout=120) as resp:
                 for line in resp:
-                    line = line.decode().strip()
+                    line = line.decode("utf-8").strip()
                     if not line.startswith("data: "):
                         continue
-                    data = line[6:]  # 去掉 "data: " 前缀
+                    data = line[6:]
                     if data == "[DONE]":
                         break
 
@@ -152,21 +153,31 @@ class Agent:
 
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
 
-                    # ── 文本增量：逐 token 打印 ──
+                    # ── 思考内容：灰色流式打印 ──
+                    rc = delta.get("reasoning_content", "")
+                    if rc:
+                        reasoning += rc
+                        print(f"\033[90m{rc}\033[0m", end="", flush=True)
+
+                    # ── 回复文本：先判断是否需要换行分隔 ──
                     content = delta.get("content", "")
                     if content:
+                        # 思考结束后、回复开始前，插入一个换行
+                        if reasoning and not reasoning_ended:
+                            print()
+                            reasoning_ended = True
                         full_content += content
                         yield content
 
-                    # ── 工具调用增量：逐片段拼接 ──
+                    # ── 工具调用：逐片段拼接 ──
                     tc_delta = delta.get("tool_calls")
                     if tc_delta:
                         for tc in tc_delta:
                             idx = tc.get("index", 0)
-                            # 确保列表足够长
                             while len(tool_calls) <= idx:
                                 tool_calls.append({
                                     "id": "",
+                                    "type": "function",
                                     "function": {"name": "", "arguments": ""},
                                 })
                             if "id" in tc:
@@ -178,25 +189,25 @@ class Agent:
                                     tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
 
         except error.HTTPError as e:
-            yield f"\n[API 错误: {e.read().decode()[:300]}]\n"
+            yield f"\n[API 错误: {e.read().decode('utf-8', errors='replace')[:300]}]\n"
         except Exception as e:
             yield f"\n[错误: {e}]\n"
 
         # 保存完整结果供 turn() 使用
         self._stream_full_content = full_content
         self._stream_tool_calls = tool_calls
+        self._stream_reasoning = reasoning
 
     # ─── 工具执行 ──────────────────────────────────
 
     def execute_tool(self, name: str, args: dict) -> str:
         """
         执行工具调用。
-        - run_shell: 执行 PowerShell 命令
-        - read_file: 读取文件内容
-        - write_file: 写入任意文件
-        - 其他名称: 在工作区查找同名脚本并执行 (.py .bat .ps1)
+        - run_shell:  执行 PowerShell 命令
+        - read_file:  读取文件内容
+        - write_file: 写入任意文件到工作区
+        - 其他:       在工作区查找同名脚本并执行 (.py .bat .ps1)
         """
-        # 执行 Shell 命令
         if name == "run_shell":
             import subprocess
             command = args.get("command", "")
@@ -215,7 +226,6 @@ class Agent:
             except Exception as e:
                 return f"命令执行失败: {e}"
 
-        # 读取文件
         if name == "read_file":
             raw_path = args.get("path", "")
             file_path = Path(raw_path)
@@ -229,7 +239,6 @@ class Agent:
             except Exception as e:
                 return f"读取失败: {e}"
 
-        # 写文件（任意类型）
         if name == "write_file":
             fname = os.path.basename(args.get("filename", "untitled.txt"))
             path = WORKSPACE / fname
@@ -269,6 +278,17 @@ class Agent:
 
         return f"未知工具: {name}"
 
+    # ─── 辅助：构建 assistant 消息 ─────────────────
+
+    def _make_assistant_msg(self, content: str, tool_calls: list) -> dict:
+        """构建 assistant 消息，如有 reasoning_content 则附带。"""
+        msg: dict = {"role": "assistant", "content": content or None}
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        if self._stream_reasoning:
+            msg["reasoning_content"] = self._stream_reasoning
+        return msg
+
     # ─── 对话回合 ──────────────────────────────────
 
     def turn(self, user_input: str):
@@ -281,6 +301,7 @@ class Agent:
         # 流式输出 LLM 回复
         self._stream_full_content = ""
         self._stream_tool_calls = []
+        self._stream_reasoning = ""
         for text in self.call_api_stream():
             print(text, end="", flush=True)
 
@@ -288,48 +309,43 @@ class Agent:
         tool_calls = self._stream_tool_calls
 
         if tool_calls:
-            print()  # 换行
-            self.messages.append({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": tool_calls,
-            })
+            # 思考模式下，工具调用前已经换过行了，这里加一个换行即可
+            if self._stream_reasoning:
+                print()
+
+            self.messages.append(self._make_assistant_msg(content, tool_calls))
 
             # 逐个执行工具
             for tc in tool_calls:
                 fn = tc["function"]
                 name = fn["name"]
                 try:
-                    args = json.loads(fn["arguments"]) if fn["arguments"].strip() else {}
+                    fn_args = json.loads(fn["arguments"]) if fn["arguments"].strip() else {}
                 except json.JSONDecodeError:
-                    args = {}
-
-                print(f"  🔧 {name}({json.dumps(args, ensure_ascii=False)[:100]})",
-                      end=" ", flush=True)
-                result = self.execute_tool(name, args)
+                    fn_args = {}
+                args_preview = json.dumps(fn_args, ensure_ascii=False)[:100]
+                print(f"  🔧 {name}({args_preview})", end=" ", flush=True)
+                result = self.execute_tool(name, fn_args)
                 print("✓")
-
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
                     "content": result,
                 })
 
-            # 工具结果已加入历史，继续让 LLM 处理
             self.turn_continue()
         else:
-            print()  # 最终换行
-            self.messages.append({"role": "assistant", "content": content})
+            print()
+            self.messages.append(self._make_assistant_msg(content, []))
 
     def turn_continue(self):
         """
         工具执行后继续对话。
-        把工具结果发给 LLM，LLM 可能会：
-        - 给出最终回答
-        - 调用更多工具（递归继续）
+        把工具结果发给 LLM，LLM 可能会继续回复或调用更多工具。
         """
         self._stream_full_content = ""
         self._stream_tool_calls = []
+        self._stream_reasoning = ""
         for text in self.call_api_stream():
             print(text, end="", flush=True)
 
@@ -337,45 +353,43 @@ class Agent:
         tool_calls = self._stream_tool_calls
 
         if tool_calls:
-            print()
-            self.messages.append({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": tool_calls,
-            })
+            if self._stream_reasoning:
+                print()
+            self.messages.append(self._make_assistant_msg(content, tool_calls))
+
             for tc in tool_calls:
                 fn = tc["function"]
                 name = fn["name"]
                 try:
-                    args = json.loads(fn["arguments"]) if fn["arguments"].strip() else {}
+                    fn_args = json.loads(fn["arguments"]) if fn["arguments"].strip() else {}
                 except json.JSONDecodeError:
-                    args = {}
-                print(f"  🔧 {name}({json.dumps(args, ensure_ascii=False)[:100]})",
-                      end=" ", flush=True)
-                result = self.execute_tool(name, args)
+                    fn_args = {}
+                args_preview = json.dumps(fn_args, ensure_ascii=False)[:100]
+                print(f"  🔧 {name}({args_preview})", end=" ", flush=True)
+                result = self.execute_tool(name, fn_args)
                 print("✓")
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
                     "content": result,
                 })
-            self.turn_continue()  # 递归：可能还有工具调用
+            self.turn_continue()
         else:
             print()
-            self.messages.append({"role": "assistant", "content": content})
+            self.messages.append(self._make_assistant_msg(content, []))
 
     # ─── 主循环 ────────────────────────────────────
 
     def run(self):
         """启动对话循环。"""
-        print(f"Neck — Python Agent")
+        print(f"Neck Agent")
         print(f"工作区: {WORKSPACE}")
         print(f"模型: {MODEL}")
         print(f"输入 /exit 退出\n")
 
         while True:
             try:
-                user_input = input("> ").strip()
+                user_input = input(">>> ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\n再见。")
                 break

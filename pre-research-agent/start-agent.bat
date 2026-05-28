@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-python agent.py
+python3 agent.py
 pause
