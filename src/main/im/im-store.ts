@@ -6,6 +6,7 @@ import type {
   ImConversation,
   ImUser,
   ImMessageStatus,
+  ImMessageAttachment,
 } from '../../shared/im-types';
 
 export function initImStore(): void {
@@ -63,6 +64,7 @@ export function initImStore(): void {
       created_at INTEGER NOT NULL,
       delivered_at INTEGER,
       read_at INTEGER,
+      attachments_json TEXT,
       local_created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (owner_user_id, local_id)
@@ -91,6 +93,10 @@ export function initImStore(): void {
   const localUserColumns = db.prepare('PRAGMA table_info(im_local_user)').all() as Array<{ name: string }>;
   if (!localUserColumns.some(col => col.name === 'auto_login')) {
     db.exec('ALTER TABLE im_local_user ADD COLUMN auto_login INTEGER NOT NULL DEFAULT 1');
+  }
+  const messageColumns = db.prepare('PRAGMA table_info(im_direct_messages)').all() as Array<{ name: string }>;
+  if (!messageColumns.some(col => col.name === 'attachments_json')) {
+    db.exec('ALTER TABLE im_direct_messages ADD COLUMN attachments_json TEXT');
   }
 }
 
@@ -223,13 +229,13 @@ export function listFriendRequests(ownerUserId: string): ImFriendRequest[] {
   }));
 }
 
-export function insertPendingMessage(ownerUserId: string, localId: string, peerUserId: string, fromUser: string, toUser: string, content: string): void {
+export function insertPendingMessage(ownerUserId: string, localId: string, peerUserId: string, fromUser: string, toUser: string, content: string, attachments: ImMessageAttachment[] = []): void {
   const db = getDb();
   const now = Date.now();
   db.prepare(`
-    INSERT INTO im_direct_messages (owner_user_id, local_id, message_id, peer_user_id, from_user, to_user, direction, content, msg_type, status, created_at, local_created_at, updated_at)
-    VALUES (?, ?, NULL, ?, ?, ?, 'out', ?, 'text', 'pending', ?, ?, ?)
-  `).run(ownerUserId, localId, peerUserId, fromUser, toUser, content, Math.floor(now / 1000), now, now);
+    INSERT INTO im_direct_messages (owner_user_id, local_id, message_id, peer_user_id, from_user, to_user, direction, content, msg_type, status, created_at, attachments_json, local_created_at, updated_at)
+    VALUES (?, ?, NULL, ?, ?, ?, 'out', ?, 'text', 'pending', ?, ?, ?, ?)
+  `).run(ownerUserId, localId, peerUserId, fromUser, toUser, content, Math.floor(now / 1000), JSON.stringify(attachments), now, now);
 }
 
 export function markMessageSent(ownerUserId: string, localId: string, messageId: string, createdAt: number): void {
@@ -254,6 +260,7 @@ export function insertIncomingMessage(ownerUserId: string, msg: {
   createdAt: number;
   deliveredAt?: number | null;
   readAt?: number | null;
+  attachments?: ImMessageAttachment[];
 }): boolean {
   const db = getDb();
   const now = Date.now();
@@ -264,15 +271,16 @@ export function insertIncomingMessage(ownerUserId: string, msg: {
   const info = db.prepare(`
     INSERT INTO im_direct_messages (
       owner_user_id, local_id, message_id, peer_user_id, from_user, to_user,
-      direction, content, msg_type, status, created_at, delivered_at, read_at, local_created_at, updated_at
+      direction, content, msg_type, status, created_at, delivered_at, read_at, attachments_json, local_created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(owner_user_id, local_id) DO UPDATE SET
       message_id = excluded.message_id,
       content = excluded.content,
       status = excluded.status,
       delivered_at = excluded.delivered_at,
       read_at = excluded.read_at,
+      attachments_json = excluded.attachments_json,
       updated_at = excluded.updated_at
   `).run(
     ownerUserId,
@@ -284,13 +292,27 @@ export function insertIncomingMessage(ownerUserId: string, msg: {
     direction,
     msg.content,
     msg.msgType || 'text',
+    msg.readAt ? 'read' : 'sent',
     msg.createdAt,
     msg.deliveredAt || null,
     msg.readAt || null,
+    JSON.stringify(msg.attachments || []),
     now,
     now,
   );
   return info.changes > 0;
+}
+
+export function updateMessageRead(ownerUserId: string, messageId: string, readAt: number): ImMessage | null {
+  const db = getDb();
+  db.prepare(`
+    UPDATE im_direct_messages
+    SET read_at = ?, status = 'read', updated_at = ?
+    WHERE owner_user_id = ? AND message_id = ?
+  `).run(readAt, Date.now(), ownerUserId, messageId);
+  const row = db.prepare('SELECT * FROM im_direct_messages WHERE owner_user_id = ? AND message_id = ?')
+    .get(ownerUserId, messageId) as Record<string, unknown> | undefined;
+  return row ? rowToMessage(row) : null;
 }
 
 export function listMessages(ownerUserId: string, peerUserId: string, limit = 50, before?: number): ImMessage[] {
@@ -325,7 +347,18 @@ function rowToMessage(row: Record<string, unknown>): ImMessage {
     createdAt: row.created_at as number,
     deliveredAt: row.delivered_at as number | null,
     readAt: row.read_at as number | null,
+    attachments: parseAttachments(row.attachments_json as string | null | undefined),
   };
+}
+
+function parseAttachments(raw: string | null | undefined): ImMessageAttachment[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.type === 'image' && typeof item.data === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 export function getMessageByLocalId(ownerUserId: string, localId: string): ImMessage | null {

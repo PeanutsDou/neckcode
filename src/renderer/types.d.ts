@@ -5,6 +5,7 @@ export interface FileEntry {
 }
 
 import type { AgentConfig, AgentError, ConfirmRequest, ProviderTestConfig, ProviderTestResult, RunStatusEvent } from '../shared/types';
+import type { ImMessageAttachment } from '../shared/im-types';
 
 export interface ElectronAPI {
   // Agent
@@ -86,6 +87,11 @@ export interface ElectronAPI {
   checkForUpdates: () => Promise<{ version?: string; error?: string }>;
   downloadUpdate: () => Promise<{ ok?: boolean; error?: string }>;
   installUpdate: () => void;
+  imSendMessage?: (input: { toUser: string; content: string; attachments?: ImMessageAttachment[] }) => Promise<unknown>;
+  imListMessages?: (peerUserId: string, options?: unknown) => Promise<any>;
+  imLoadHistory?: (peerUserId: string, options?: unknown) => Promise<any>;
+  imMarkRead?: (messageId: string, fromUser?: string) => Promise<unknown>;
+  imClearUnread?: (peerUserId: string) => Promise<unknown>;
 }
 
 declare global {

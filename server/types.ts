@@ -97,6 +97,15 @@ export interface SearchUser {
 
 export type MsgType = 'text' | 'system';
 
+export interface MessageAttachment {
+  id?: string;
+  type: 'image';
+  data: string;
+  mimeType: string;
+  name?: string;
+  size?: number;
+}
+
 export interface DirectMessageRow {
   id: string;
   from_user: string;
@@ -106,6 +115,7 @@ export interface DirectMessageRow {
   created_at: number;
   delivered_at: number | null;
   read_at: number | null;
+  attachments_json?: string | null;
 }
 
 export interface MessagePayload {
@@ -118,6 +128,7 @@ export interface MessagePayload {
   createdAt: number;
   deliveredAt?: number | null;
   readAt?: number | null;
+  attachments?: MessageAttachment[];
 }
 
 // ─── 认证 ───

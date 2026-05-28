@@ -6,8 +6,8 @@ type UiohookEvent = {
 
 type UiohookModule = {
   uIOhook: {
-    on(event: 'keydown', listener: (event: UiohookEvent) => void): void;
-    off(event: 'keydown', listener: (event: UiohookEvent) => void): void;
+    on(event: 'keydown' | 'keyup', listener: (event: UiohookEvent) => void): void;
+    off(event: 'keydown' | 'keyup', listener: (event: UiohookEvent) => void): void;
     start(): void;
     stop(): void;
   };
@@ -18,9 +18,11 @@ type UiohookModule = {
 };
 
 let hookModule: UiohookModule | null = null;
-let listener: ((event: UiohookEvent) => void) | null = null;
+let keydownListener: ((event: UiohookEvent) => void) | null = null;
+let keyupListener: ((event: UiohookEvent) => void) | null = null;
 let lastCtrlDownAt = 0;
 let lastTriggeredAt = 0;
+let ctrlIsDown = false;
 let running = false;
 
 function isCtrlKey(keycode: number | undefined): boolean {
@@ -32,8 +34,10 @@ export function startQuickLauncherHotkey(onTrigger: () => void): void {
   if (running) return;
 
   hookModule = require('uiohook-napi') as UiohookModule;
-  listener = (event) => {
+  keydownListener = (event) => {
     if (!isCtrlKey(event.keycode)) return;
+    if (ctrlIsDown) return;
+    ctrlIsDown = true;
     const cfg = getConfig().quickLauncher;
     if (cfg?.enabled === false) return;
     const now = Date.now();
@@ -46,23 +50,33 @@ export function startQuickLauncherHotkey(onTrigger: () => void): void {
       onTrigger();
     }
   };
+  keyupListener = (event) => {
+    if (!isCtrlKey(event.keycode)) return;
+    ctrlIsDown = false;
+  };
 
-  hookModule.uIOhook.on('keydown', listener);
+  hookModule.uIOhook.on('keydown', keydownListener);
+  hookModule.uIOhook.on('keyup', keyupListener);
   hookModule.uIOhook.start();
   running = true;
   console.info('[QuickLauncher] global Ctrl double-tap listener started');
 }
 
 export function stopQuickLauncherHotkey(): void {
-  if (hookModule && listener) {
-    hookModule.uIOhook.off('keydown', listener);
+  if (hookModule && keydownListener) {
+    hookModule.uIOhook.off('keydown', keydownListener);
+  }
+  if (hookModule && keyupListener) {
+    hookModule.uIOhook.off('keyup', keyupListener);
   }
   if (running) {
     hookModule?.uIOhook.stop();
   }
   hookModule = null;
-  listener = null;
+  keydownListener = null;
+  keyupListener = null;
   lastCtrlDownAt = 0;
   lastTriggeredAt = 0;
+  ctrlIsDown = false;
   running = false;
 }

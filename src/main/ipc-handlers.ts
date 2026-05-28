@@ -125,6 +125,19 @@ function getWindow() {
   return _mainWindow && !_mainWindow.isDestroyed() ? _mainWindow : null;
 }
 
+function requestWindowAttention(): void {
+  const win = getWindow();
+  if (!win) return;
+  if (win.isFocused() && !win.isMinimized() && win.isVisible()) return;
+  win.flashFrame(true);
+  setTimeout(() => {
+    try { win.flashFrame(false); } catch {}
+  }, 12000);
+  win.once('focus', () => {
+    try { win.flashFrame(false); } catch {}
+  });
+}
+
 function emitRunStatus(sessionId: string, status: RunStatusEvent): void {
   getWindow()?.webContents.send('agent:run-status', sessionId, {
     ...status,
@@ -531,6 +544,7 @@ export function setupIpcHandlers(
             flushDelta();
             emitRunStatus(sessionId, { phase: 'finishing', currentTool: null });
             getWindow()?.webContents.send('agent:turn-done', sessionId, step);
+            requestWindowAttention();
           },
           onError(error) {
             const agentError = classifyAgentError(error);
@@ -1131,6 +1145,8 @@ export function setupIpcHandlers(
       codeLeftWidth: cfg.codeLeftWidth,
       autoLaunch: cfg.autoLaunch || false,
       quickLauncher: cfg.quickLauncher,
+      lastSeenReleaseNotesVersion: cfg.lastSeenReleaseNotesVersion,
+      imAgent: cfg.imAgent,
       baseUrl: active.baseUrl,
       deepseekApiKey: cfg.providers.find(p => p.id === 'deepseek')?.apiKey || '',
       anthropicApiKey: cfg.providers.find(p => p.id === 'anthropic')?.apiKey || '',
@@ -1169,6 +1185,18 @@ export function setupIpcHandlers(
     }
     else if (key === 'codeLeftWidth') { cfg.codeLeftWidth = value as number; await saveConfig(); return; }
     else if (key === 'fontScale') { cfg.fontScale = value as number; await saveConfig(); return; }
+    else if (key === 'lastSeenReleaseNotesVersion') { cfg.lastSeenReleaseNotesVersion = value as string; await saveConfig(); return; }
+    else if (key === 'imAgent') {
+      const input = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+      cfg.imAgent = {
+        enabled: input.enabled === true,
+        autoReplyWhenAway: input.autoReplyWhenAway === true,
+        allowSessionList: input.allowSessionList !== false,
+        allowSessionPreview: input.allowSessionPreview === true,
+      };
+      await saveConfig();
+      return;
+    }
     else if (key === 'quickLauncher') {
       const input = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
       cfg.quickLauncher = {

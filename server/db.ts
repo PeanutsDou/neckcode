@@ -128,6 +128,7 @@ function runMigrations(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       delivered_at INTEGER,
       read_at INTEGER,
+      attachments_json TEXT,
       FOREIGN KEY (from_user) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (to_user) REFERENCES users(id) ON DELETE CASCADE,
       CHECK (from_user <> to_user),
@@ -138,6 +139,11 @@ function runMigrations(): void {
     CREATE INDEX IF NOT EXISTS idx_dm_to_from_created ON direct_messages(to_user, from_user, created_at);
     CREATE INDEX IF NOT EXISTS idx_dm_to_delivered ON direct_messages(to_user, delivered_at);
   `);
+
+  const dmColumns = getDb().prepare('PRAGMA table_info(direct_messages)').all() as Array<{ name: string }>;
+  if (!dmColumns.some((col) => col.name === 'attachments_json')) {
+    getDb().exec('ALTER TABLE direct_messages ADD COLUMN attachments_json TEXT');
+  }
 }
 
 export function closeDb(): void {

@@ -68,6 +68,15 @@ export interface ImFriendRequest {
 export type ImMessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
 export type ImMessageDirection = 'in' | 'out';
 
+export interface ImMessageAttachment {
+  id?: string;
+  type: 'image';
+  data: string;
+  mimeType: string;
+  name?: string;
+  size?: number;
+}
+
 export interface ImMessage {
   localId?: string;
   messageId: string;
@@ -81,11 +90,13 @@ export interface ImMessage {
   createdAt: number;
   deliveredAt: number | null;
   readAt: number | null;
+  attachments?: ImMessageAttachment[];
 }
 
 export interface ImSendMessageInput {
   toUser: string;
   content: string;
+  attachments?: ImMessageAttachment[];
 }
 
 export interface ImSendMessageResult {

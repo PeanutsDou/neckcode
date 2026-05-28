@@ -17,6 +17,8 @@ import type { Provider } from './agent/runtime';
 import type { ToolRegistry } from './agent/runtime';
 import type { ConfirmRequest } from '../shared/types';
 import { APP_BRAND_NAME, APP_DATA_DIR_NAME, userDataDir } from './app-paths';
+import { listSessions } from './session-store';
+import type { ImMessage } from '../shared/im-types';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -239,6 +241,59 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
     toolRegistries.set(sessionId, registry);
   }
   return registry;
+}
+
+async function runImAgentResponder(message: ImMessage): Promise<string | null> {
+  const cfg = getConfig();
+  if (!cfg.imAgent?.enabled) return null;
+  const sessions = cfg.imAgent.allowSessionList
+    ? listSessions().slice(0, 30).map((session) => {
+      const messages = Array.isArray(session.messages) ? session.messages : [];
+      const preview = cfg.imAgent?.allowSessionPreview
+        ? messages.slice(-6).map((entry: any) => ({
+          role: entry?.role || entry?.kind || 'unknown',
+          content: String(entry?.content || '').slice(0, 240),
+        })).filter((entry) => entry.content)
+        : undefined;
+      return {
+        id: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        messageCount: messages.length,
+        preview,
+      };
+    })
+    : [];
+  const provider = createProvider(undefined, { stream: false, maxTokens: 800 });
+  const result = await provider.runStep({
+    model: cfg.activeModel,
+    tools: [],
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are Neck Code IM Agent, a limited auto-reply assistant for the user.',
+          'Reply in Chinese unless the peer uses another language.',
+          'You have read-only context only. Do not claim you can operate the computer or access files.',
+          'Be concise and tell the peer when a request needs the owner to return.',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          incomingMessage: message.content,
+          hasImages: (message.attachments?.length || 0) > 0,
+          neckCodeState: {
+            sessionListAvailable: cfg.imAgent.allowSessionList,
+            sessionPreviewAvailable: cfg.imAgent.allowSessionPreview,
+            sessions,
+          },
+        }, null, 2),
+        attachments: message.attachments?.map((item) => ({ type: 'image' as const, data: item.data, mimeType: item.mimeType })) || [],
+      },
+    ],
+  });
+  return result.text?.trim() || null;
 }
 
 function saveWindowBounds(): void {
@@ -483,9 +538,9 @@ app.whenReady().then(async () => {
   const { initAgentMd, initSkills } = require('./ipc-handlers');
   await initAgentMd();
   await initSkills();
-  setupImIpcHandlers();
+  setupImIpcHandlers(null, runImAgentResponder);
   createWindow();
-  setupImIpcHandlers(mainWindow);
+  setupImIpcHandlers(mainWindow, runImAgentResponder);
   if (mainWindow) { import("./ipc-handlers").then(m => m.setMainWindow(mainWindow!)).catch(() => {}); }
   createQuickLauncherWindow();
   try {

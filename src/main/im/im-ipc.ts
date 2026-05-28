@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { ImClient } from './im-client';
 import * as imStore from './im-store';
 import { normalizeError, badRequestError, cacheError } from './im-errors';
+import { getConfig } from '../config';
 import type {
   ImAuthState,
   ImFriend,
@@ -19,6 +20,8 @@ let mainWindow: BrowserWindow | null = null;
 let handlersRegistered = false;
 let flushingPending = false;
 let nextAuthShouldPersist = true;
+let attentionTimer: NodeJS.Timeout | null = null;
+let imAgentResponder: ((message: ImMessage) => Promise<string | null>) | null = null;
 
 function getClient(): ImClient {
   if (!imClient) throw new Error('IM client not initialized');
@@ -31,6 +34,22 @@ function sendToRenderer(channel: string, data: unknown): void {
   } catch {
     /* window may be closed */
   }
+}
+
+function requestAttention(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isFocused() && !mainWindow.isMinimized() && mainWindow.isVisible()) return;
+  mainWindow.flashFrame(true);
+  if (attentionTimer) clearTimeout(attentionTimer);
+  attentionTimer = setTimeout(() => {
+    attentionTimer = null;
+    try { mainWindow?.flashFrame(false); } catch {}
+  }, 12000);
+  mainWindow.once('focus', () => {
+    if (attentionTimer) clearTimeout(attentionTimer);
+    attentionTimer = null;
+    try { mainWindow?.flashFrame(false); } catch {}
+  });
 }
 
 function loadLocalState(): { friends: ImFriend[]; requests: ImFriendRequest[]; conversations: ImConversation[] } | null {
@@ -122,6 +141,7 @@ function messagePayloadToLocal(ownerUserId: string, msg: Record<string, unknown>
     createdAt: Number(msg.createdAt || Math.floor(Date.now() / 1000)),
     deliveredAt: typeof msg.deliveredAt === 'number' ? msg.deliveredAt : null,
     readAt: typeof msg.readAt === 'number' ? msg.readAt : null,
+    attachments: Array.isArray(msg.attachments) ? msg.attachments as any : [],
   };
 }
 
@@ -136,10 +156,11 @@ function cacheServerMessage(ownerUserId: string, msg: Record<string, unknown>, u
     createdAt: localMessage.createdAt,
     deliveredAt: localMessage.deliveredAt,
     readAt: localMessage.readAt,
+    attachments: localMessage.attachments || [],
   });
   const friend = imStore.getFriend(ownerUserId, localMessage.peerUserId);
   imStore.upsertConversation(ownerUserId, localMessage.peerUserId, friend?.username || '', friend?.displayName || '', {
-    lastMessagePreview: localMessage.content.slice(0, 50),
+    lastMessagePreview: localMessage.content.slice(0, 50) || ((localMessage.attachments?.length || 0) > 0 ? '[Image]' : ''),
     lastMessageAt: localMessage.createdAt,
     unreadDelta: inserted ? unreadDelta : 0,
   });
@@ -152,6 +173,7 @@ async function sendPendingMessage(client: ImClient, ownerUserId: string, message
     toUser: message.toUser,
     content: message.content,
     msgType: 'text',
+    attachments: message.attachments || [],
   }, { localMessageId: message.localId }) as Record<string, unknown>;
 
   imStore.markMessageSent(ownerUserId, message.localId, String(result.messageId || ''), Number(result.createdAt || message.createdAt));
@@ -184,6 +206,57 @@ async function flushPendingMessages(client: ImClient, ownerUserId: string): Prom
   } finally {
     flushingPending = false;
   }
+}
+
+async function sendAutomatedReply(client: ImClient, ownerUserId: string, toUser: string, content: string): Promise<void> {
+  const text = content.trim();
+  if (!text) return;
+  const localId = randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  const friend = imStore.getFriend(ownerUserId, toUser);
+  imStore.insertPendingMessage(ownerUserId, localId, toUser, ownerUserId, toUser, text, []);
+  imStore.upsertConversation(ownerUserId, toUser, friend?.username || '', friend?.displayName || '', {
+    lastMessagePreview: text.slice(0, 50),
+    lastMessageAt: now,
+    unreadDelta: 0,
+  });
+  const message = imStore.getMessageByLocalId(ownerUserId, localId);
+  if (message) sendToRenderer('im:message-new', { message });
+  await sendPendingMessage(client, ownerUserId, message || {
+    localId,
+    messageId: '',
+    peerUserId: toUser,
+    fromUser: ownerUserId,
+    toUser,
+    direction: 'out',
+    content: text,
+    msgType: 'text',
+    status: 'pending',
+    createdAt: now,
+    deliveredAt: null,
+    readAt: null,
+    attachments: [],
+  });
+}
+
+function shouldImAgentTakeOver(message: ImMessage): boolean {
+  const cfg = getConfig().imAgent;
+  if (!cfg?.enabled || !cfg.autoReplyWhenAway || !imAgentResponder) return false;
+  if (message.direction !== 'in') return false;
+  if (!mainWindow || mainWindow.isDestroyed()) return true;
+  return mainWindow.isMinimized() || !mainWindow.isVisible() || !mainWindow.isFocused();
+}
+
+function maybeRunImAgent(client: ImClient, ownerUserId: string, message: ImMessage): void {
+  if (!shouldImAgentTakeOver(message)) return;
+  const responder = imAgentResponder;
+  if (!responder) return;
+  responder(message).then((reply) => {
+    if (!reply) return;
+    return sendAutomatedReply(client, ownerUserId, message.peerUserId, reply);
+  }).catch((err) => {
+    sendToRenderer('im:error', { error: cacheError(`IM Agent failed: ${String(err)}`) });
+  });
 }
 
 function bindClientEvents(client: ImClient): void {
@@ -261,6 +334,8 @@ function bindClientEvents(client: ImClient): void {
         const msg = p as Record<string, unknown>;
         const localMessage = cacheServerMessage(userId, msg, 1);
         sendToRenderer('im:message-new', { message: localMessage });
+        if (localMessage.direction === 'in') requestAttention();
+        maybeRunImAgent(client, userId, localMessage);
         const conv = conversationFor(userId, localMessage.peerUserId);
         if (conv) sendToRenderer('im:conversation-updated', { conversation: conv });
         break;
@@ -271,6 +346,8 @@ function bindClientEvents(client: ImClient): void {
         for (const msg of p.messages as Array<Record<string, unknown>>) {
           const localMessage = cacheServerMessage(userId, msg, 1);
           sendToRenderer('im:message-new', { message: localMessage });
+          if (localMessage.direction === 'in') requestAttention();
+          maybeRunImAgent(client, userId, localMessage);
           const conv = conversationFor(userId, localMessage.peerUserId);
           if (conv) sendToRenderer('im:conversation-updated', { conversation: conv });
         }
@@ -289,6 +366,16 @@ function bindClientEvents(client: ImClient): void {
         break;
       }
 
+      case 'msg.read_notify': {
+        if (!userId) break;
+        const messageId = String(p.messageId || '');
+        const readAt = typeof p.readAt === 'number' ? p.readAt : Math.floor(Date.now() / 1000);
+        if (!messageId) break;
+        const updated = imStore.updateMessageRead(userId, messageId, readAt);
+        if (updated) sendToRenderer('im:message-updated', { localId: updated.localId, message: updated });
+        break;
+      }
+
       case 'error':
         sendToRenderer('im:error', payload);
         break;
@@ -296,8 +383,9 @@ function bindClientEvents(client: ImClient): void {
   });
 }
 
-export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
+export function setupImIpcHandlers(win: BrowserWindow | null = null, responder?: (message: ImMessage) => Promise<string | null>): void {
   mainWindow = win || mainWindow;
+  if (responder) imAgentResponder = responder;
   if (handlersRegistered) return;
   handlersRegistered = true;
 
@@ -459,23 +547,25 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
 
   ipcMain.handle('im:send-message', async (_event, input: ImSendMessageInput) => {
     try {
-      if (!input.toUser) throw badRequestError('缺少接收人');
-      if (!input.content || input.content.trim().length === 0) throw badRequestError('消息不能为空');
-      if (input.content.length > 4000) throw badRequestError('消息过长');
+      if (!input.toUser) throw badRequestError('Missing recipient');
+      const attachments = Array.isArray(input.attachments) ? input.attachments : [];
+      if ((!input.content || input.content.trim().length === 0) && attachments.length === 0) throw badRequestError('Message is empty');
+      if (input.content.length > 4000) throw badRequestError('Message is too long');
 
       const client = getClient();
       const localUser = imStore.getLocalUser();
       const userId = client.getUserId() || localUser?.userId;
-      if (!userId) throw badRequestError('未登录');
+      if (!userId) throw badRequestError('Not logged in');
 
       const localId = randomUUID();
       const now = Math.floor(Date.now() / 1000);
       const friend = imStore.getFriend(userId, input.toUser);
+      const preview = input.content.slice(0, 50) || (attachments.length > 0 ? '[Image]' : '');
 
       try {
-        imStore.insertPendingMessage(userId, localId, input.toUser, userId, input.toUser, input.content);
+        imStore.insertPendingMessage(userId, localId, input.toUser, userId, input.toUser, input.content, attachments);
         imStore.upsertConversation(userId, input.toUser, friend?.username || '', friend?.displayName || '', {
-          lastMessagePreview: input.content.slice(0, 50),
+          lastMessagePreview: preview,
           lastMessageAt: now,
           unreadDelta: 0,
         });
@@ -494,6 +584,7 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
         createdAt: now,
         deliveredAt: null,
         readAt: null,
+        attachments,
       };
       sendToRenderer('im:message-new', { message: pendingMessage });
       const pendingConv = conversationFor(userId, input.toUser);
@@ -523,7 +614,6 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
       return { error: normalizeError(err) };
     }
   });
-
   ipcMain.handle('im:list-messages', async (_event, peerUserId: string, options?: { limit?: number; before?: number }) => {
     try {
       const user = imStore.getLocalUser();
@@ -551,9 +641,9 @@ export function setupImIpcHandlers(win: BrowserWindow | null = null): void {
     }
   });
 
-  ipcMain.handle('im:mark-read', async (_event, messageId: string) => {
+  ipcMain.handle('im:mark-read', async (_event, messageId: string, fromUser?: string) => {
     try {
-      return await getClient().sendRequest('msg.read', { messageId });
+      return await getClient().sendRequest('msg.read', { messageId, fromUser });
     } catch (err) {
       return { error: normalizeError(err) };
     }

@@ -8,12 +8,12 @@ function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function statusText(status: ImMessage['status']): string {
-  if (status === 'pending') return '发送中';
-  if (status === 'failed') return '发送失败';
-  if (status === 'read') return '已读';
-  if (status === 'delivered') return '已送达';
-  return '已发送';
+function statusText(msg: ImMessage): string {
+  if (msg.status === 'pending') return 'Sending';
+  if (msg.status === 'failed') return 'Failed';
+  if (msg.readAt || msg.status === 'read') return 'Read';
+  if (msg.deliveredAt || msg.status === 'delivered') return 'Delivered';
+  return 'Sent';
 }
 
 export function MessageList({ peerId }: { peerId: string }) {
@@ -24,6 +24,17 @@ export function MessageList({ peerId }: { peerId: string }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, peerId]);
+
+  useEffect(() => {
+    const unread = messages.filter((msg) => msg.direction === 'in' && msg.messageId && !msg.readAt);
+    for (const msg of unread) {
+      window.electronAPI?.imMarkRead?.(msg.messageId, msg.fromUser);
+    }
+    if (unread.length > 0) {
+      window.electronAPI?.imClearUnread?.(peerId);
+      useImStore.getState().clearUnread(peerId);
+    }
+  }, [messages, peerId]);
 
   useEffect(() => {
     let disposed = false;
@@ -51,25 +62,39 @@ export function MessageList({ peerId }: { peerId: string }) {
 
   return (
     <div style={containerStyle}>
-      {loading && <div style={loadingStyle}>正在同步消息...</div>}
+      {loading && <div style={loadingStyle}>Syncing messages...</div>}
       {messages.length === 0 && !loading && (
-        <div style={emptyStyle}>暂无消息，发送第一条消息开始对话。</div>
+        <div style={emptyStyle}>No messages yet.</div>
       )}
       {messages.map((msg, i) => {
         const isOut = msg.direction === 'out';
         return (
           <div key={msg.localId || msg.messageId || i} style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', marginBottom: 10 }}>
             <div style={{ ...bubbleStyle, ...(isOut ? outBubbleStyle : inBubbleStyle) }}>
-              <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+              {Boolean(msg.content) && <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>}
+              {(msg.attachments || []).length > 0 && (
+                <div style={imageGridStyle}>
+                  {(msg.attachments || []).map((item, idx) => (
+                    <button
+                      key={item.id || `${idx}-${item.data.slice(0, 16)}`}
+                      type="button"
+                      style={imageButtonStyle}
+                      onClick={() => window.dispatchEvent(new CustomEvent('open-image-viewer', { detail: item.data }))}
+                    >
+                      <img src={item.data} alt={item.name || 'image'} style={imageStyle} />
+                    </button>
+                  ))}
+                </div>
+              )}
               <div style={{ ...metaStyle, color: isOut ? 'rgba(255,255,255,0.78)' : 'var(--text-muted)' }}>
                 <span>{formatTime(msg.createdAt)}</span>
-                {isOut && <span>{statusText(msg.status)}</span>}
+                {isOut && <span>{statusText(msg)}</span>}
                 {msg.status === 'failed' && (
                   <button
-                    onClick={() => window.electronAPI!.imSendMessage({ toUser: peerId, content: msg.content })}
+                    onClick={() => window.electronAPI!.imSendMessage({ toUser: peerId, content: msg.content, attachments: msg.attachments || [] })}
                     style={retryStyle}
                   >
-                    重试
+                    Retry
                   </button>
                 )}
               </div>
@@ -124,6 +149,29 @@ const inBubbleStyle: React.CSSProperties = {
   background: 'var(--bg-surface)',
   color: 'var(--text-primary)',
   borderBottomLeftRadius: 5,
+};
+
+const imageGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 180px))',
+  gap: 6,
+  marginTop: 4,
+};
+
+const imageButtonStyle: React.CSSProperties = {
+  padding: 0,
+  border: 'none',
+  borderRadius: 8,
+  overflow: 'hidden',
+  background: 'transparent',
+  cursor: 'zoom-in',
+};
+
+const imageStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  maxHeight: 220,
+  objectFit: 'cover',
 };
 
 const metaStyle: React.CSSProperties = {

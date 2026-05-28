@@ -271,7 +271,7 @@ const api = {
   imSendMessage: (input: any) => ipcRenderer.invoke('im:send-message', input),
   imListMessages: (peerUserId: any, options: any) => ipcRenderer.invoke('im:list-messages', peerUserId, options),
   imLoadHistory: (peerUserId: any, options: any) => ipcRenderer.invoke('im:load-history', peerUserId, options),
-  imMarkRead: (messageId: any) => ipcRenderer.invoke('im:mark-read', messageId),
+  imMarkRead: (messageId: any, fromUser?: any) => ipcRenderer.invoke('im:mark-read', messageId, fromUser),
   imListConversations: () => ipcRenderer.invoke('im:list-conversations'),
   imClearUnread: (peerUserId: any) => ipcRenderer.invoke('im:clear-unread', peerUserId),
 

@@ -42,6 +42,13 @@ export interface AppConfigData {
   alwaysOnTop?: boolean;
   fontScale?: number;
   codeLeftWidth?: number;
+  lastSeenReleaseNotesVersion?: string;
+  imAgent?: {
+    enabled: boolean;
+    autoReplyWhenAway: boolean;
+    allowSessionList: boolean;
+    allowSessionPreview: boolean;
+  };
   window?: {
     x?: number;
     y?: number;
@@ -116,6 +123,12 @@ const defaultConfig: AppConfigData = {
     findMaxDepth: 4,
     favorites: [],
   },
+  imAgent: {
+    enabled: false,
+    autoReplyWhenAway: false,
+    allowSessionList: true,
+    allowSessionPreview: false,
+  },
   agents: [],
 };
 
@@ -139,6 +152,7 @@ function cloneDefaultConfig(): AppConfigData {
     agent: { ...defaultConfig.agent },
     window: defaultConfig.window ? { ...defaultConfig.window } : undefined,
     quickLauncher: defaultConfig.quickLauncher ? { ...defaultConfig.quickLauncher } : undefined,
+    imAgent: defaultConfig.imAgent ? { ...defaultConfig.imAgent } : undefined,
     agents: defaultConfig.agents.map(agent => ({ ...agent, skills: [...agent.skills] })),
   };
 }
@@ -225,6 +239,13 @@ function normalizeLoadedConfig(loaded: AppConfigData): AppConfigData {
   loaded.permissionMode = normalizePermissionMode(loaded.permissionMode);
   loaded.autoLaunch = typeof loaded.autoLaunch === 'boolean' ? loaded.autoLaunch : defaultConfig.autoLaunch;
   loaded.agents = normalizeAgents(loaded.agents);
+  const rawImAgent: Record<string, unknown> = isRecord(loaded.imAgent) ? loaded.imAgent : {};
+  loaded.imAgent = {
+    enabled: rawImAgent.enabled === true,
+    autoReplyWhenAway: rawImAgent.autoReplyWhenAway === true,
+    allowSessionList: rawImAgent.allowSessionList !== false,
+    allowSessionPreview: rawImAgent.allowSessionPreview === true,
+  };
   const rawQuickLauncher: Record<string, unknown> = isRecord(loaded.quickLauncher) ? loaded.quickLauncher : {};
   loaded.quickLauncher = {
     enabled: typeof rawQuickLauncher.enabled === 'boolean' ? rawQuickLauncher.enabled : defaultConfig.quickLauncher!.enabled,

@@ -64,6 +64,7 @@ export default function App() {
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [version, setVersion] = useState('');
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [codeLeftWidth, setCodeLeftWidth] = useState(() => 280);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const handleCodeResize = (delta: number) => {
@@ -130,7 +131,10 @@ export default function App() {
         useAppStore.getState().setLightScheme(normalizeLightScheme(c.lightScheme));
         useAppStore.getState().setFontScale(c.fontScale || 100);
         useAppStore.getState().setModel(c.model);
-        if (c.version) setVersion(c.version);
+        if (c.version) {
+          setVersion(c.version);
+          if (c.lastSeenReleaseNotesVersion !== c.version) setReleaseNotesOpen(true);
+        }
         useAppStore.getState().setAvailableModels(c.models || []);
         if (c.codeLeftWidth) setCodeLeftWidth(c.codeLeftWidth);
       }).catch(() => {});
@@ -207,6 +211,11 @@ export default function App() {
     } catch {
       setAlwaysOnTop(!next);
     }
+  };
+
+  const dismissReleaseNotes = () => {
+    setReleaseNotesOpen(false);
+    if (version) window.electronAPI?.setConfig('lastSeenReleaseNotesVersion', version).catch(() => {});
   };
 
   return (
@@ -374,6 +383,22 @@ export default function App() {
         <ImageViewer open={!!viewerSrc} src={viewerSrc || ''} onClose={() => setViewerSrc(null)} />
         <CloseDialog />
         <AskDialog />
+        {releaseNotesOpen && (
+          <div className="close-dialog-overlay">
+            <div className="whats-new-dialog">
+              <h3>Neck Code v{version}</h3>
+              <p>本次更新包含 IM 消息提醒、图片收发、已读状态、悬浮输入框 Ctrl 双击修复，以及 IM Agent 接管配置入口。</p>
+              <div className="whats-new-list">
+                <div>IM 新消息和 Agent 任务完成时，最小化窗口会在任务栏闪烁提醒。</div>
+                <div>IM 输入框支持粘贴图片，消息气泡可直接预览图片。</div>
+                <div>IM Agent 默认关闭，可在配置中逐步开放只读上下文能力。</div>
+              </div>
+              <div className="close-dialog-buttons">
+                <button className="btn-send" onClick={dismissReleaseNotes}>我知道了</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </ErrorBoundary>
   );

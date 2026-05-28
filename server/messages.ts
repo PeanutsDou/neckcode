@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getDb } from './db';
 import { AppError, ErrorCodes } from './errors';
-import type { MessagePayload, MsgType } from './types';
+import type { MessageAttachment, MessagePayload, MsgType } from './types';
 import { getUserPublic } from './auth';
 import { logger } from './logger';
 
@@ -11,22 +11,58 @@ export interface SendMessageResult {
   content: string;
   msgType: MsgType;
   createdAt: number;
+  attachments: MessageAttachment[];
 }
 
-function validateMessage(fromUserId: string, toUserId: string, content: string, msgType: string): void {
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS = 4;
+const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+export function sanitizeAttachments(raw: unknown): MessageAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, MAX_ATTACHMENTS).map((item): MessageAttachment | null => {
+    if (!item || typeof item !== 'object') return null;
+    const source = item as Record<string, unknown>;
+    const type = source.type === 'image' ? 'image' : null;
+    const data = typeof source.data === 'string' ? source.data : '';
+    const mimeType = typeof source.mimeType === 'string' ? source.mimeType : '';
+    const size = typeof source.size === 'number' ? source.size : undefined;
+    if (!type || !data.startsWith('data:image/') || !ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) return null;
+    if (size && size > MAX_IMAGE_BYTES) return null;
+    return {
+      id: typeof source.id === 'string' ? source.id : undefined,
+      type,
+      data,
+      mimeType,
+      name: typeof source.name === 'string' ? source.name.slice(0, 120) : undefined,
+      size,
+    };
+  }).filter((item): item is MessageAttachment => item !== null);
+}
+
+function parseAttachments(raw: string | null | undefined): MessageAttachment[] {
+  if (!raw) return [];
+  try {
+    return sanitizeAttachments(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+function validateMessage(fromUserId: string, toUserId: string, content: string, msgType: string, attachments: MessageAttachment[]): void {
   const db = getDb();
 
   if (!getUserPublic(toUserId)) {
-    throw new AppError(ErrorCodes.USER_NOT_FOUND, '用户不存在');
+    throw new AppError(ErrorCodes.USER_NOT_FOUND, 'User not found');
   }
-  if (!content || content.trim().length === 0) {
-    throw new AppError(ErrorCodes.MESSAGE_EMPTY, '消息内容不能为空');
+  if ((!content || content.trim().length === 0) && attachments.length === 0) {
+    throw new AppError(ErrorCodes.MESSAGE_EMPTY, 'Message is empty');
   }
   if (content.length > 4000) {
-    throw new AppError(ErrorCodes.MESSAGE_TOO_LONG, '消息内容过长，最多 4000 字符');
+    throw new AppError(ErrorCodes.MESSAGE_TOO_LONG, 'Message is too long');
   }
   if (msgType !== 'text') {
-    throw new AppError(ErrorCodes.BAD_REQUEST, '当前仅支持 text 消息');
+    throw new AppError(ErrorCodes.BAD_REQUEST, 'Only text messages are supported');
   }
 
   const relation = db.prepare(
@@ -34,7 +70,7 @@ function validateMessage(fromUserId: string, toUserId: string, content: string, 
   ).get(fromUserId, toUserId) as { status: string } | undefined;
 
   if (!relation) {
-    throw new AppError(ErrorCodes.NOT_FRIEND, '只能给好友发送消息');
+    throw new AppError(ErrorCodes.NOT_FRIEND, 'Can only message accepted friends');
   }
 }
 
@@ -43,20 +79,23 @@ export function sendMessage(
   fromUsername: string,
   toUserId: string,
   content: string,
-  msgType: string = 'text'
+  msgType: string = 'text',
+  rawAttachments?: unknown,
 ): SendMessageResult {
-  validateMessage(fromUserId, toUserId, content, msgType);
+  const attachments = sanitizeAttachments(rawAttachments);
+  validateMessage(fromUserId, toUserId, content, msgType, attachments);
 
   const messageId = randomUUID();
   const createdAt = Math.floor(Date.now() / 1000);
 
-  logger.info('Message accepted', { messageId, from: fromUserId, fromUsername, to: toUserId });
+  logger.info('Message accepted', { messageId, from: fromUserId, fromUsername, to: toUserId, attachmentCount: attachments.length });
   return {
     messageId,
     toUser: toUserId,
     content,
     msgType: msgType as MsgType,
     createdAt,
+    attachments,
   };
 }
 
@@ -67,17 +106,18 @@ export function queueOfflineMessage(msg: {
   content: string;
   msgType: MsgType;
   createdAt: number;
+  attachments?: MessageAttachment[];
 }): void {
   getDb().prepare(`
-    INSERT OR IGNORE INTO direct_messages (id, from_user, to_user, content, msg_type, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(msg.messageId, msg.fromUser, msg.toUser, msg.content, msg.msgType, msg.createdAt);
+    INSERT OR IGNORE INTO direct_messages (id, from_user, to_user, content, msg_type, created_at, attachments_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(msg.messageId, msg.fromUser, msg.toUser, msg.content, msg.msgType, msg.createdAt, JSON.stringify(msg.attachments || []));
   logger.info('Queued offline message', { messageId: msg.messageId, from: msg.fromUser, to: msg.toUser });
 }
 
 export function getOfflineMessages(userId: string): MessagePayload[] {
   const rows = getDb().prepare(`
-    SELECT dm.id, dm.from_user, dm.to_user, dm.content, dm.msg_type, dm.created_at,
+    SELECT dm.id, dm.from_user, dm.to_user, dm.content, dm.msg_type, dm.created_at, dm.attachments_json,
            u.display_name as from_name
     FROM direct_messages dm
     JOIN users u ON u.id = dm.from_user
@@ -90,6 +130,7 @@ export function getOfflineMessages(userId: string): MessagePayload[] {
     content: string;
     msg_type: string;
     created_at: number;
+    attachments_json?: string | null;
     from_name: string;
   }>;
 
@@ -101,6 +142,7 @@ export function getOfflineMessages(userId: string): MessagePayload[] {
     content: row.content,
     msgType: row.msg_type as MsgType,
     createdAt: row.created_at,
+    attachments: parseAttachments(row.attachments_json),
   }));
 }
 
@@ -124,7 +166,7 @@ export function getHistory(
 
 function validateHistoryAccess(currentUserId: string, peerUserId: string): void {
   if (!getUserPublic(peerUserId)) {
-    throw new AppError(ErrorCodes.USER_NOT_FOUND, '用户不存在');
+    throw new AppError(ErrorCodes.USER_NOT_FOUND, 'User not found');
   }
 
   const relation = getDb().prepare(
@@ -132,7 +174,7 @@ function validateHistoryAccess(currentUserId: string, peerUserId: string): void 
   ).get(currentUserId, peerUserId) as { status: string } | undefined;
 
   if (!relation) {
-    throw new AppError(ErrorCodes.NOT_FRIEND, '只能查看好友的本地历史');
+    throw new AppError(ErrorCodes.NOT_FRIEND, 'Can only view accepted friend history');
   }
 }
 

@@ -445,13 +445,14 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
       const toUser = String(p.toUser || '').trim();
       const content = String(p.content || '');
       const msgType = String(p.msgType || 'text');
+      const attachments = Array.isArray(p.attachments) ? p.attachments : [];
 
       if (!toUser) {
         sendError(ctx, req.requestId, new AppError(ErrorCodes.BAD_REQUEST, '缺少 toUser'));
         return;
       }
 
-      const result = messages.sendMessage(ctx.userId!, ctx.username!, toUser, content, msgType);
+      const result = messages.sendMessage(ctx.userId!, ctx.username!, toUser, content, msgType, attachments);
 
       // 发送回执
       send(ctx, {
@@ -472,6 +473,7 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
         content: result.content,
         msgType: result.msgType,
         createdAt: result.createdAt,
+        attachments: result.attachments,
       };
 
       // 在线消息直接转发；离线时只保存未送达队列，送达后删除，不保存长期历史。
@@ -488,6 +490,7 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
           content: result.content,
           msgType: result.msgType,
           createdAt: result.createdAt,
+          attachments: result.attachments,
         });
       }
       return;
@@ -519,6 +522,7 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
     case 'msg.read': {
       const p = req.payload || {};
       const messageId = String(p.messageId || '').trim();
+      const fromUser = String(p.fromUser || '').trim();
 
       if (!messageId) {
         sendError(ctx, req.requestId, new AppError(ErrorCodes.BAD_REQUEST, '缺少 messageId'));
@@ -532,6 +536,15 @@ async function dispatch(ctx: ClientContext, req: WsRequest): Promise<void> {
         payload: {
           messageId: result.messageId,
           readAt: result.readAt,
+        },
+      });
+
+      if (fromUser && fromUser !== ctx.userId) pushToUser(fromUser, {
+        type: 'msg.read_notify',
+        payload: {
+          messageId: result.messageId,
+          readAt: result.readAt,
+          readerUser: ctx.userId,
         },
       });
 

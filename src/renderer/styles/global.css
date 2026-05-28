@@ -2985,6 +2985,39 @@ html, body {
   accent-color: var(--accent);
 }
 
+.whats-new-dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 26px 30px;
+  width: 430px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.whats-new-dialog h3 {
+  font-size: 17px;
+  font-weight: 650;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+
+.whats-new-dialog p,
+.whats-new-list {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.whats-new-dialog p {
+  margin: 0 0 14px;
+}
+
+.whats-new-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
 /* ===== Ask Dialog ===== */
 
 .ask-dialog {
