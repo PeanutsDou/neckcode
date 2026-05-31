@@ -112,7 +112,16 @@ export const MessageBubble = memo(function MessageBubble({ entry }: Props) {
   if (entry.role === 'system' && entry.toolSummary) {
     return (
       <div className="message message-tool">
-        <ToolSummaryCard summary={entry.content} tools={entry.toolSummary} />
+        <ToolSummaryCard
+          summary={entry.content}
+          tools={entry.toolSummary}
+          expanded={entry.toolSummaryExpanded}
+          onToggle={(expanded) => {
+            const state = useChatStore.getState();
+            const sid = state.activeId || 'default';
+            state.setEntryToolSummaryExpanded(sid, entry.id, expanded);
+          }}
+        />
       </div>
     );
   }

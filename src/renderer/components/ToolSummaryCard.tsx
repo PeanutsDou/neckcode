@@ -9,6 +9,8 @@ interface ToolSummaryItem {
 interface Props {
   summary: string;
   tools: ToolSummaryItem[];
+  expanded?: boolean;
+  onToggle?: (expanded: boolean) => void;
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -77,8 +79,18 @@ function SubToolRow({ tool }: { tool: ToolSummaryItem }) {
   );
 }
 
-export function ToolSummaryCard({ summary, tools }: Props) {
-  const [expanded, setExpanded] = useState(false);
+export function ToolSummaryCard({ summary, tools, expanded: expandedProp, onToggle }: Props) {
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = expandedProp ?? localExpanded;
+
+  const toggle = () => {
+    const next = !expanded;
+    if (onToggle) {
+      onToggle(next);
+    } else {
+      setLocalExpanded(next);
+    }
+  };
 
   if (!tools || tools.length === 0) {
     return <div className="tsum-text">{summary}</div>;
@@ -92,7 +104,7 @@ export function ToolSummaryCard({ summary, tools }: Props) {
 
   return (
     <div className="tsum-group">
-      <div className="tsum-header" onClick={() => setExpanded(!expanded)}>
+      <div className="tsum-header" onClick={toggle}>
         <span className="tsum-arrow">{expanded ? '▾' : '▸'}</span>
         <span className="tsum-summary">{summaryLine}</span>
         <span className="tsum-count">{tools.length} tools</span>

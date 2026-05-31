@@ -13,6 +13,7 @@ export interface ChatEntry {
   toolCallId?: string;
   timestamp: number;
   toolSummary?: Array<{ name: string; argumentsText: string; resultPreview: string }>;
+  toolSummaryExpanded?: boolean;
 }
 
 export interface SessionState {
@@ -52,6 +53,7 @@ interface ChatState {
   setRunTokensTo: (sid: string, inputTokens: number, outputTokens: number) => void;
   trimEntriesFrom: (sid: string, fromIndex: number) => void;
   setSessionModelTo: (sid: string, modelId: string) => void;
+  setEntryToolSummaryExpanded: (sid: string, entryId: string, expanded: boolean) => void;
 
   ensureActiveSession: () => string;
   startNew: (modelId?: string) => void;
@@ -341,6 +343,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (get().activeId === sid) useAppStore.getState().setModel(modelId);
     const entries = get().sessions[sid]?.entries || [];
     if (entries.length > 0) void autoSave(sid, entries, modelId);
+  },
+
+  setEntryToolSummaryExpanded(sid, entryId, expanded) {
+    set(state => updateSession(state, sid, ses => {
+      const entries = ses.entries.map(e =>
+        e.id === entryId ? { ...e, toolSummaryExpanded: expanded } : e,
+      );
+      void autoSave(sid, entries);
+      return { ...ses, entries };
+    }));
   },
 
   ensureActiveSession() {
