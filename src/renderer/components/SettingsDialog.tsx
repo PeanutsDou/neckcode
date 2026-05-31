@@ -55,6 +55,9 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [autoLaunch, setAutoLaunch] = useState(false);
+  const [petEnabled, setPetEnabled] = useState(true);
+  const [petTheme, setPetTheme] = useState('clawd');
+  const [qlExpanded, setQlExpanded] = useState(false);
   const [quickLauncher, setQuickLauncher] = useState<QuickLauncherSettings>({
     enabled: true,
     triggerWindowMs: 400,
@@ -76,6 +79,9 @@ export function SettingsDialog({ open, onClose }: Props) {
       setProviderList(list.map((p: any) => ({ id: p.id, name: p.name, models: Array.isArray(p.models) ? p.models.map((m: any) => typeof m === 'string' ? m : m.name) : [] })));
       setAutoLaunch(Boolean(cfg.autoLaunch));
       window.electronAPI.getAutoLaunch?.().then((enabled: boolean) => setAutoLaunch(Boolean(enabled))).catch(() => {});
+      // Pet state
+      window.electronAPI.getPetStatus?.().then((enabled: boolean) => setPetEnabled(Boolean(enabled))).catch(() => {});
+      window.electronAPI.getPetTheme?.().then((t: string) => setPetTheme(t || 'clawd')).catch(() => {});
       const quick = cfg.quickLauncher || {};
       setQuickLauncher({
         enabled: quick.enabled !== false,
@@ -341,7 +347,37 @@ export function SettingsDialog({ open, onClose }: Props) {
                 </label>
               </div>
               <div className="quick-settings-card">
-                <div className="quick-settings-title">QuickLauncher</div>
+                <div className="quick-settings-title">🦀 桌宠</div>
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={petEnabled}
+                    onChange={e => {
+                      setPetEnabled(e.target.checked);
+                      window.electronAPI.togglePet?.().catch(() => {});
+                    }}
+                  />
+                  显示桌面宠物
+                </label>
+                <label className="settings-label">宠物选择
+                  <select
+                    className="settings-input"
+                    value={petTheme}
+                    onChange={e => {
+                      setPetTheme(e.target.value);
+                      window.electronAPI.setPetTheme?.(e.target.value).catch(() => {});
+                    }}
+                  >
+                    <option value="clawd">🦀 Clawd 螃蟹</option>
+                    <option value="calico">🐱 Calico 三花猫</option>
+                    <option value="cloudling">☁️ Cloudling 云宝</option>
+                  </select>
+                </label>
+              </div>
+              <div className="quick-settings-card">
+                <div className="quick-settings-title" onClick={() => setQlExpanded(!qlExpanded)} style={{ cursor: 'pointer', userSelect: 'none' }}>
+                  {qlExpanded ? '▼' : '▶'} QuickLauncher
+                </div>
                 <label className="settings-check">
                   <input
                     type="checkbox"
@@ -350,6 +386,8 @@ export function SettingsDialog({ open, onClose }: Props) {
                   />
                   双击 Ctrl 唤起
                 </label>
+                {qlExpanded && (
+                  <>
                 <label className="settings-label">双击判定窗口(ms)
                   <input
                     type="number"
@@ -401,6 +439,8 @@ export function SettingsDialog({ open, onClose }: Props) {
                     onChange={e => void updateQuickLauncher({ findMaxDepth: Number(e.target.value) || 4 })}
                   />
                 </label>
+                  </>
+                )}
               </div>
             </div>
           </div>

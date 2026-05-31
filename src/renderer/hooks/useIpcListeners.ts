@@ -68,6 +68,16 @@ export function useIpcListeners() {
         store.setState({ sessions: { ...state.sessions, [sid]: { ...ses, entries } } });
       }
     }));
+    unsubs.push(api.onToolSummary?.((sid, data: any) => {
+      if (!data?.summary) return;
+      store.getState().addEntryTo(sid, {
+        id: `tool_summary_${Date.now()}`,
+        role: 'system',
+        content: data.summary || '',
+        toolSummary: Array.isArray(data.tools) ? data.tools : undefined,
+        timestamp: Date.now(),
+      });
+    }) || (() => {}));
     unsubs.push(api.onTurnDone((sid, data: any) => {
       store.getState().finishStreamTo(sid, data.text);
     }));

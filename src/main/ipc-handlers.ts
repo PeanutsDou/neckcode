@@ -1,4 +1,4 @@
-﻿import { ipcMain, BrowserWindow, dialog } from 'electron';
+import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { promises as fs } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { spawn, type ChildProcess } from 'child_process';
@@ -29,7 +29,20 @@ import {
   type SessionData,
 } from './session-store';
 import { getQuickLauncherWindow, syncQuickLauncherTheme } from './quick-launcher/window';
+import { setPetState, sayPet } from './pet-window';
+import { isPlanMode, enterPlanMode, exitPlanMode } from './plan-mode';
+import {
+  shouldExtractMemory,
+  extractSessionMemory,
+  getSessionMemoryContent,
+  getLayeredMemoryContent,
+  getCachedLayeredMemoryContent,
+  preloadLayeredMemoryContent,
+} from './session-memory';
 import { APP_DATA_DIR_NAME, LEGACY_APP_DATA_DIR_NAME, legacyUserDataDir, userDataDir } from './app-paths';
+import { addToTotalSessionCost, calculateUSDCost, getCostSummary, resetCostState, getCostStateSnapshot, restoreCostState, type StoredCostState } from './cost-tracker';
+import { triggerHooks, triggerHooksSync } from './hooks';
+import { listTasksSnapshot, onTasksChanged } from './tools/task-tools';
 
 let agentMdContent = '';
 let agentMdFiles: string[] = [];
@@ -43,7 +56,10 @@ const sessionAbortControllers = new Map<string, AbortController>();
 const sessionRunningTurns = new Map<string, Promise<unknown>>();
 const sessionQueuedTurns = new Map<string, QueuedUserMessage[]>();
 const sessionModels = new Map<string, string>();
+/** Persist compactCount across session agent recreations (e.g. when switching conversations). */
+const sessionCompactMeta = new Map<string, { compactCount: number; lastCompactAt: number | null }>();
 const QUICK_CHAT_SESSION_ID = '__quick_chat_ephemeral__';
+let activePetSession: string | null = null; // track which session controls the pet
 const quickChatEntries: Array<Record<string, unknown>> = [];
 let quickChatSavedSessionId: string | null = null;
 
@@ -51,6 +67,9 @@ let currentPermissionMode: PermissionMode = getConfig().permissionMode || 'defau
 
 export function getPermissionMode(): PermissionMode {
   currentPermissionMode = getConfig().permissionMode || currentPermissionMode || 'default';
+  if (currentPermissionMode === 'plan') {
+    enterPlanMode();
+  }
   return currentPermissionMode;
 }
 
@@ -110,6 +129,14 @@ function buildAgentsPrompt(): string {
 function buildFullPrompt(): string {
   const cfg = getConfig();
   const parts = [cfg.systemPrompt];
+  const workspaceRoot = cfg.agent.workspaceRoot;
+  const layeredMemory = getCachedLayeredMemoryContent(workspaceRoot);
+  if (!layeredMemory.session && !layeredMemory.project && !layeredMemory.user) {
+    void preloadLayeredMemoryContent(workspaceRoot).catch(() => {});
+  }
+  if (layeredMemory.project) parts.push('## Project Memory\n\n' + layeredMemory.project);
+  if (layeredMemory.user) parts.push('## User Preferences Memory\n\n' + layeredMemory.user);
+  if (layeredMemory.session) parts.push('## Session Memory\n\n' + layeredMemory.session);
   if (agentMdContent) parts.push(agentMdContent);
   const skillsPrompt = buildSkillsPrompt();
   if (skillsPrompt) parts.push(skillsPrompt);
@@ -139,6 +166,29 @@ function requestWindowAttention(): void {
 }
 
 function emitRunStatus(sessionId: string, status: RunStatusEvent): void {
+  // Sync pet state with agent phase (deduplicated, streaming skipped)
+  const phase = status.phase;
+  const tool = (status.currentTool || status.lastTool || '');
+  if (phase !== 'streaming' && phase !== 'requesting_model') {
+    if (phase === 'starting') {
+      setPetState('thinking'); sayPet('\uD83D\uDCAD Thinking...');
+    } else if (phase === 'tool_running') {
+      const label = tool || 'Working';
+      if (tool === 'write_file' || tool === 'edit_file') { setPetState('working'); sayPet('\u270F\uFE0F ' + label); }
+      else if (tool === 'run_shell') { setPetState('carrying'); sayPet('\u2699\uFE0F ' + label); }
+      else if (tool.startsWith('mcp__')) { setPetState('carrying'); sayPet('\uD83D\uDD17 MCP: ' + tool.replace('mcp__', '').split('__')[0]); }
+      else if (tool === 'task_create' || tool === 'task_update') { setPetState('building'); sayPet('\uD83D\uDCCB ' + label); }
+      else if (tool === 'read_file' || tool === 'glob' || tool === 'grep' || tool === 'web_fetch' || tool === 'web_search') { setPetState('thinking'); sayPet('\uD83D\uDD0D ' + label); }
+      else { setPetState('working'); sayPet('\uD83D\uDD27 ' + label); }
+    } else if (phase === 'finishing') {
+      setPetState('attention'); sayPet('\u2705 Done');
+    } else if (phase === 'error') {
+      setPetState('error'); sayPet('\u274C Error');
+    } else if (phase === 'aborted') {
+      setPetState('idle');
+    }
+  }
+
   getWindow()?.webContents.send('agent:run-status', sessionId, {
     ...status,
     lastEventAt: status.lastEventAt || Date.now(),
@@ -405,7 +455,18 @@ export function setupIpcHandlers(
     return agent;
   }
 
-  function contextStatusToRunStatus(status: ContextStatus): Partial<RunStatusEvent> {
+  function contextStatusToRunStatus(status: ContextStatus, sessionId?: string): Partial<RunStatusEvent> {
+    // Persist compactCount when agent has real compaction data
+    if (sessionId && (status.compactCount ?? 0) > 0) {
+      sessionCompactMeta.set(sessionId, { compactCount: status.compactCount ?? 0, lastCompactAt: status.lastCompactAt ?? null });
+    }
+    // Override from cache if fresh agent reports 0 (session switch)
+    let compactCount: number = (status.compactCount ?? 0);
+    let lastCompactAt: number | null = (status.lastCompactAt ?? null);
+    if (sessionId && compactCount === 0) {
+      const cached = sessionCompactMeta.get(sessionId);
+      if (cached) { compactCount = cached.compactCount; lastCompactAt = cached.lastCompactAt; }
+    }
     return {
       currentTokens: status.currentTokens,
       estimatedTokens: status.estimatedTokens,
@@ -421,8 +482,8 @@ export function setupIpcHandlers(
       contextSource: status.source,
       compacting: status.compacting,
       compacted: status.compacted,
-      lastCompactAt: status.lastCompactAt,
-      compactCount: status.compactCount,
+      lastCompactAt,
+      compactCount,
       compactError: status.compactError,
       consecutiveCompactFailures: status.consecutiveCompactFailures,
     };
@@ -500,6 +561,7 @@ export function setupIpcHandlers(
 
     try {
       emitRunStatus(sessionId, { phase: 'starting', startedAt: Date.now(), inputTokens: 0, outputTokens: 0, currentTool: null, lastTool: null, errorCode: null });
+      claimPetSession(sessionId);
       const result = await sessionAgent.runUserTurn(
         message,
         attachments as { type: 'image'; data: string; mimeType: string }[],
@@ -534,6 +596,17 @@ export function setupIpcHandlers(
               result,
             });
           },
+          onToolSummary(summary, tools) {
+            if (!summary) return;
+            getWindow()?.webContents.send('agent:tool-summary', sessionId, {
+              summary,
+              tools: tools.map(tool => ({
+                name: tool.name,
+                argumentsText: tool.argumentsText,
+                resultPreview: tool.result.length > 500 ? `${tool.result.slice(0, 500)}...` : tool.result,
+              })),
+            });
+          },
           takeQueuedUserMessage() {
             return takeQueuedTurn(sessionId);
           },
@@ -543,7 +616,22 @@ export function setupIpcHandlers(
           onComplete(step) {
             flushDelta();
             emitRunStatus(sessionId, { phase: 'finishing', currentTool: null });
+            releasePetSession(sessionId);
+            // Cost tracking
+            if (step.usage) {
+              const costModel = getSessionModelId(sessionId);
+              const turnCost = calculateUSDCost(costModel, step.usage);
+              addToTotalSessionCost(turnCost, step.usage, costModel);
+              getWindow()?.webContents.send('cost:updated', getCostSummary());
+            }
             getWindow()?.webContents.send('agent:turn-done', sessionId, step);
+            // Session memory: check if we should extract
+            const msgs = sessionAgent.getMessages();
+            const wsRoot = getConfig().agent.workspaceRoot;
+            if (shouldExtractMemory(msgs, wsRoot)) {
+              const prov = getProvider(getSessionModelId(sessionId));
+              void extractSessionMemory(msgs, wsRoot, () => prov).catch(() => {});
+            }
             requestWindowAttention();
           },
           onError(error) {
@@ -556,6 +644,7 @@ export function setupIpcHandlers(
           },
         },
         abortCtrl.signal,
+        sessionId,
       );
       if (flushTimer) { clearInterval(flushTimer); flushDelta(); }
 
@@ -568,6 +657,7 @@ export function setupIpcHandlers(
         || (typeof DOMException !== 'undefined' && err instanceof DOMException);
       if (isAbort) {
         emitRunStatus(sessionId, { phase: 'aborted', currentTool: null, errorCode: 'aborted' });
+        releasePetSession(sessionId);
       } else {
         const agentError = classifyAgentError(err);
         emitRunStatus(sessionId, { phase: 'error', currentTool: null, errorCode: agentError.code });
@@ -696,6 +786,8 @@ export function setupIpcHandlers(
 
     try {
       emitQuick('quick-chat:run-status', { phase: 'starting', startedAt: Date.now(), lastEventAt: Date.now(), currentTool: null, errorCode: null });
+      setPetState('thinking'); sayPet('\u{1F4AC} Quick Chat...');
+      claimPetSession(QUICK_CHAT_SESSION_ID);
       const result = await agent.runUserTurn(
         message,
         attachments,
@@ -720,6 +812,7 @@ export function setupIpcHandlers(
           },
           onToolStart(toolCall) {
             emitQuick('quick-chat:run-status', { phase: 'tool_running', lastEventAt: Date.now(), currentTool: toolCall.name });
+            setPetState('working'); sayPet('\u{1F527} ' + (toolCall.name || 'Working'));
             const entry = quickEntry('tool', '', {
               toolCallId: toolCall.id,
               toolName: toolCall.name,
@@ -746,6 +839,8 @@ export function setupIpcHandlers(
             const assistantText = step.text || finalText;
             quickEntry('assistant', assistantText);
             emitQuick('quick-chat:run-status', { phase: 'finishing', lastEventAt: Date.now(), currentTool: null });
+            setPetState('attention'); sayPet('\u{2705} Done');
+            releasePetSession(QUICK_CHAT_SESSION_ID);
             emitQuick('quick-chat:done', { text: assistantText });
           },
           onError(error) {
@@ -772,9 +867,13 @@ export function setupIpcHandlers(
       const isAbort = msg === 'Aborted' || (err instanceof Error && err.name === 'AbortError');
       if (isAbort) {
         emitQuick('quick-chat:run-status', { phase: 'aborted', lastEventAt: Date.now(), currentTool: null, errorCode: 'aborted' });
+        setPetState('idle');
+        releasePetSession(QUICK_CHAT_SESSION_ID);
       } else {
         const agentError = classifyAgentError(err);
         emitQuick('quick-chat:run-status', { phase: 'error', lastEventAt: Date.now(), currentTool: null, errorCode: agentError.code });
+        setPetState('error'); sayPet('\u{274C} Error');
+        releasePetSession(QUICK_CHAT_SESSION_ID);
         if (!errorSent) emitQuick('quick-chat:error', agentError);
       }
       return null;
@@ -797,7 +896,8 @@ export function setupIpcHandlers(
     sessionAbortControllers.delete(QUICK_CHAT_SESSION_ID);
     clearQueuedTurns(QUICK_CHAT_SESSION_ID);
     cancelPendingInteractionsForSession(QUICK_CHAT_SESSION_ID, 'Quick chat aborted');
-    emitQuick('quick-chat:run-status', { phase: 'aborted', lastEventAt: Date.now(), currentTool: null, errorCode: 'aborted' });
+        emitQuick('quick-chat:run-status', { phase: 'aborted', lastEventAt: Date.now(), currentTool: null, errorCode: 'aborted' });
+        setPetState('idle');
   });
 
   ipcMain.handle('quick-chat:clear', () => {
@@ -810,6 +910,7 @@ export function setupIpcHandlers(
     quickChatEntries.splice(0, quickChatEntries.length);
     quickChatSavedSessionId = null;
     emitQuick('quick-chat:cleared');
+    releasePetSession(QUICK_CHAT_SESSION_ID);
   });
 
   ipcMain.handle('quick-chat:save-session', async (event) => {
@@ -848,6 +949,21 @@ export function setupIpcHandlers(
   const FIND_SESSION = '__quick_find__';
   let findAbortController: AbortController | null = null;
 
+
+function claimPetSession(sessionId: string) {
+  if (sessionId !== QUICK_CHAT_SESSION_ID && sessionId !== FIND_SESSION) {
+    activePetSession = sessionId;
+  } else if (!activePetSession || activePetSession === QUICK_CHAT_SESSION_ID || activePetSession === FIND_SESSION) {
+    activePetSession = sessionId;
+  }
+}
+
+function releasePetSession(sessionId: string) {
+  if (activePetSession === sessionId) {
+    activePetSession = null;
+    setPetState('idle');
+  }
+}
   const FIND_SYSTEM_PROMPT = `你是文件检索专家。用户用自然语言描述想找的文件或目录，你只能使用以下工具在磁盘上实际查找，绝不编造路径。
 
 工具：
@@ -872,6 +988,7 @@ export function setupIpcHandlers(
     findAbortController = null;
     sessionAgents.delete(FIND_SESSION);
     cancelPendingInteractionsForSession(FIND_SESSION, 'Find cleared');
+    releasePetSession(FIND_SESSION);
   });
 
   ipcMain.handle('quick-find:agent-search', async (_event, query: string) => {
@@ -937,10 +1054,10 @@ export function setupIpcHandlers(
           onContextUpdate() {},
           onDelta() { getQuickWindow()?.webContents.send('quick-find:delta', arguments[0]); },
           onReasoning() {},
-          onToolStart(tc: ToolCall) { getQuickWindow()?.webContents.send('quick-find:tool', { name: tc.name, args: tc.argumentsText }); },
+          onToolStart(tc: ToolCall) { getQuickWindow()?.webContents.send('quick-find:tool', { name: tc.name, args: tc.argumentsText }); setPetState('thinking'); sayPet('\u{1F50D} Searching...'); },
           onToolResult() {},
-          onComplete() {},
-          onError() {},
+          onComplete() { setPetState('attention'); sayPet('\u{2705} Found'); },
+          onError() { setPetState('error'); },
         },
         findAbortController.signal,
       );
@@ -984,7 +1101,7 @@ export function setupIpcHandlers(
         isDir: !p.includes('.'), score: 70 - i * 5, source: 'agent',
       }));
     } catch (err: any) {
-      if (err?.message === 'Aborted') return [];
+      if (err?.message === 'Aborted') { releasePetSession(FIND_SESSION); return []; }
       return [];
     }
   });
@@ -1029,7 +1146,7 @@ export function setupIpcHandlers(
     if (existing) {
       const agent = createSessionAgent(sessionId, existing.getMessages());
       sessionAgents.set(sessionId, agent);
-      emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(agent.getContextStatus()) });
+      emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(agent.getContextStatus(), sessionId) });
     }
   });
 
@@ -1037,6 +1154,7 @@ export function setupIpcHandlers(
     sessionAgents.delete(sessionId);
     sessionAbortControllers.delete(sessionId);
     sessionModels.delete(sessionId);
+    sessionCompactMeta.delete(sessionId);
     clearQueuedTurns(sessionId);
     cancelPendingInteractionsForSession(sessionId, 'Session reset');
   });
@@ -1049,7 +1167,7 @@ export function setupIpcHandlers(
     agent.loadMessages(messages as any);
     sessionAgents.set(sessionId, agent);
     const context = agent.getContextStatus();
-    emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(context), compacted: false });
+    emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(context, sessionId), compacted: false });
     return context;
   });
 
@@ -1064,7 +1182,7 @@ export function setupIpcHandlers(
   ipcMain.handle('agent:get-context-status', (_event, sessionId: string) => getContextStatusForSession(sessionId));
   ipcMain.handle('agent:refresh-context-status', (_event, sessionId: string) => {
     const status = getContextStatusForSession(sessionId);
-    emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(status) });
+    emitRunStatus(sessionId, { phase: 'idle', ...contextStatusToRunStatus(status, sessionId) });
     return status;
   });
   ipcMain.handle('agent:context-status', (_event, sessionId: string) => getContextStatusForSession(sessionId));
@@ -1377,9 +1495,14 @@ export function setupIpcHandlers(
   // Permission mode
   ipcMain.handle('permission:get', () => getPermissionMode());
   ipcMain.handle('permission:set', async (_event, mode: string) => {
-    const valid: string[] = ['default', 'fullAccess'];
+    const valid: string[] = ['default', 'fullAccess', 'plan'];
     if (valid.includes(mode)) {
       currentPermissionMode = mode as PermissionMode;
+      if (currentPermissionMode === 'plan') {
+        enterPlanMode();
+      } else {
+        exitPlanMode();
+      }
       const cfg = getConfig();
       cfg.permissionMode = currentPermissionMode;
       await saveConfig();
@@ -1418,11 +1541,18 @@ export function setupIpcHandlers(
       ...session,
       agentMessages: agent ? agent.getMessages() : session.agentMessages,
       updatedAt: session.updatedAt || Date.now(),
-    });
+      costState: getCostStateSnapshot(),
+    } as any);
   });
 
   ipcMain.handle('session:load', async (_event, id: string) => {
-    return loadSession(id);
+    const session = loadSession(id);
+    if (session && (session as any).costState) {
+      restoreCostState((session as any).costState);
+    }
+    // Emit updated cost to frontend
+    getWindow()?.webContents.send('cost:updated', getCostSummary());
+    return session;
   });
 
   ipcMain.handle('session:list', async () => {
@@ -1434,6 +1564,7 @@ export function setupIpcHandlers(
     sessionAbortControllers.delete(id);
     sessionAgents.delete(id);
     sessionModels.delete(id);
+    sessionCompactMeta.delete(id);
     clearQueuedTurns(id);
     cancelPendingInteractionsForSession(id, 'Session deleted');
     deleteSession(id);
@@ -1661,6 +1792,43 @@ export function setupIpcHandlers(
   });
   ipcMain.handle('window:close', () => getWindow()?.close());
 
+  // ---- Cost Tracking IPC ----
+  // ---- Plan Mode ----
+  ipcMain.handle('plan-mode:status', () => isPlanMode());
+  ipcMain.handle('plan-mode:toggle', async () => {
+    if (isPlanMode()) {
+      exitPlanMode();
+      currentPermissionMode = 'default';
+    } else {
+      enterPlanMode();
+      currentPermissionMode = 'plan';
+    }
+    const cfg = getConfig();
+    cfg.permissionMode = currentPermissionMode;
+    await saveConfig();
+    return isPlanMode();
+  });
+
+  ipcMain.handle('session-memory:get', async () => {
+    return getSessionMemoryContent(getConfig().agent.workspaceRoot);
+  });
+
+  ipcMain.handle('session-memory:get-layered', async () => {
+    return getLayeredMemoryContent(getConfig().agent.workspaceRoot);
+  });
+
+  ipcMain.handle('session-memory:reload', async () => {
+    return preloadLayeredMemoryContent(getConfig().agent.workspaceRoot);
+  });
+
+  ipcMain.handle('tasks:list', () => listTasksSnapshot());
+  onTasksChanged((tasks) => {
+    getWindow()?.webContents.send('tasks:updated', tasks);
+  });
+
+  ipcMain.handle('cost:summary', () => getCostSummary());
+  ipcMain.handle('cost:reset', () => { resetCostState(); return getCostSummary(); });
+
   ipcMain.handle('terminal:stop', () => {
     termProcess?.kill();
     termProcess = null;
@@ -1671,6 +1839,7 @@ export async function initAgentMd(): Promise<void> {
   const result = await discoverAgentMd(getConfig().agent.workspaceRoot);
   agentMdContent = result.content;
   agentMdFiles = result.files;
+  await preloadLayeredMemoryContent(getConfig().agent.workspaceRoot).catch(() => {});
 }
 
 export async function initSkills(): Promise<void> {

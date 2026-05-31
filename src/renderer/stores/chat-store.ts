@@ -12,6 +12,7 @@ export interface ChatEntry {
   toolResult?: string;
   toolCallId?: string;
   timestamp: number;
+  toolSummary?: Array<{ name: string; argumentsText: string; resultPreview: string }>;
 }
 
 export interface SessionState {

@@ -1,11 +1,11 @@
-﻿import { app, BrowserWindow, screen, Tray, Menu, nativeImage, ipcMain } from 'electron';
+import { app, BrowserWindow, screen, Tray, Menu, nativeImage, ipcMain } from 'electron';
 import path from 'path';
 import { autoUpdater } from 'electron-updater';
 import { setupIpcHandlers } from './ipc-handlers';
 import { setupImIpcHandlers } from './im/im-ipc';
 import { createOpenAIProvider } from './providers/openai-compatible';
 import { createAnthropicProvider } from './providers/anthropic';
-import { createToolRegistry } from './tools/registry';
+import { createToolRegistry, type ExternalToolsProvider, type McpToolExecutor } from './tools/registry';
 import { loadConfig, saveConfig, getConfig, getActiveProvider, getModelConfig, inferModelMode } from './config';
 import { loadSkills } from './skills/loader';
 import { createInvokeAgentHandler } from './tools/agent-tools';
@@ -19,6 +19,12 @@ import type { ConfirmRequest } from '../shared/types';
 import { APP_BRAND_NAME, APP_DATA_DIR_NAME, userDataDir } from './app-paths';
 import { listSessions } from './session-store';
 import type { ImMessage } from '../shared/im-types';
+// MCP
+import { loadMcpConfig } from './mcp/config';
+import { initMcpClient, getMcpToolDefinitions, callMcpTool, shutdownMcpClient } from './mcp/client';
+import { shutdownLspServers } from './lsp/manager';
+// Desktop pet
+import { createPetWindow, setPetState, destroyPetWindow, isPetEnabled, setPetEnabled, togglePet, getPetTheme, setPetTheme, type PetState, type PetTheme } from './pet-window';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -149,6 +155,20 @@ ipcMain.handle('window:set-always-on-top', async (_event, enabled: boolean) => {
   return value;
 });
 
+// Pet toggle
+ipcMain.handle('pet:toggle', async () => {
+  togglePet();
+  return isPetEnabled();
+});
+ipcMain.handle('pet:status', async () => isPetEnabled());
+ipcMain.handle('pet:theme', async () => getPetTheme());
+ipcMain.handle('pet:set-theme', async (_e, theme: string) => {
+  if (theme === 'clawd' || theme === 'calico' || theme === 'cloudling') {
+    setPetTheme(theme);
+  }
+  return getPetTheme();
+});
+
 ipcMain.handle('window:get-always-on-top', async () => {
   return mainWindow?.isAlwaysOnTop() || Boolean(getConfig().alwaysOnTop);
 });
@@ -202,6 +222,7 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
     const invokeAgent = createInvokeAgentHandler(
       () => getAgents(),
       createProvider,
+      () => getPermissionMode(),
     );
     registry = createToolRegistry(
       getConfig().agent.workspaceRoot,
@@ -237,6 +258,8 @@ function getOrCreateTools(sessionId = 'default'): ToolRegistry {
       },
       () => getPermissionMode(),
       invokeAgent,
+      () => getMcpToolDefinitions(),
+      (name, args) => callMcpTool(name, args),
     );
     toolRegistries.set(sessionId, registry);
   }
@@ -533,7 +556,15 @@ app.whenReady().then(async () => {
   }
   await ensureDefaultTemplates();
   await loadSkills(getConfig().agent.workspaceRoot);
+  // Initialize MCP client
+  loadMcpConfig().then(mcpCfg => initMcpClient(mcpCfg)).catch(err => {
+    console.error('[MCP] Init failed:', err);
+  });
   setupIpcHandlers(createProvider, getOrCreateTools);
+  // Activate built-in hooks (cost tracking, session memory, etc.)
+  import('./hooks/builtins').then(({ registerBuiltinHooks }) => {
+    registerBuiltinHooks(() => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  }).catch(err => console.error('[hooks] Failed to register builtins:', err));
   setupQuickLauncherIpc();
   const { initAgentMd, initSkills } = require('./ipc-handlers');
   await initAgentMd();
@@ -551,6 +582,8 @@ app.whenReady().then(async () => {
   // Everything 全盘搜索引擎初始化（异步，不阻塞启动）
   import('./quick-launcher/everything').then(({ initEverything }) => initEverything());
   createTray();
+  // Create desktop pet if enabled
+  if (isPetEnabled()) createPetWindow();
   setupAutoUpdater();
 
   app.on('activate', () => {
@@ -572,4 +605,7 @@ app.on('before-quit', () => {
   (app as any).__quitting = true;
   stopQuickLauncherHotkey();
   destroyQuickLauncherWindow();
+  shutdownMcpClient().catch(() => {});
+  shutdownLspServers().catch(() => {});
+  destroyPetWindow();
 });

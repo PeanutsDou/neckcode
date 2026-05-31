@@ -5,6 +5,7 @@ import { getLoadedSkills, renderSkillForInvocation } from '../skills/loader';
 import type { Provider, ToolRegistry } from '../agent/runtime';
 import type { Attachment } from '../agent/types';
 import type { AgentConfig } from '../../shared/types';
+import type { PermissionMode } from '../../shared/permissions';
 
 /**
  * Build system prompt for a sub-agent by injecting skill contents.
@@ -40,6 +41,7 @@ async function runSubAgent(
   task: string,
   attachments: Attachment[],
   createProvider: (modelId?: string) => Provider,
+  getPermissionMode: () => PermissionMode,
   signal?: AbortSignal,
 ): Promise<string> {
   const cfg = getConfig();
@@ -48,12 +50,13 @@ async function runSubAgent(
   // Create provider for the sub-agent's model
   const provider = createProvider(agent.model);
 
-  // Create tool registry for sub-agent: full access, no confirm dialogs, no ask
+  // Sub-agents inherit parent permissions. Plan mode remains read-only and
+  // default mode still routes dangerous actions through the parent policy.
   const tools = createToolRegistry(
     cfg.agent.workspaceRoot,
-    async () => true, // Auto-approve all confirms
+    async () => getPermissionMode() === 'fullAccess',
     async () => { throw new Error('Sub-agent cannot ask questions'); },
-    () => 'fullAccess',
+    getPermissionMode,
   );
 
   // Tool call log
@@ -125,6 +128,7 @@ async function runSubAgent(
 export function createInvokeAgentHandler(
   getAgents: () => AgentConfig[],
   createProvider: (modelId?: string) => Provider,
+  getPermissionMode: () => PermissionMode,
 ) {
   return async (
     args: Record<string, unknown>,
@@ -155,7 +159,7 @@ export function createInvokeAgentHandler(
       const effectiveTask = parentUserMessage && parentUserMessage !== task
         ? `${task}\n\n[Parent user message for context]\n${parentUserMessage}`
         : task;
-      const result = await runSubAgent(agent, effectiveTask, attachments, createProvider);
+      const result = await runSubAgent(agent, effectiveTask, attachments, createProvider, getPermissionMode);
       return result;
     } catch (err) {
       return `ERROR: Sub-agent "${agent.name}" failed: ${err instanceof Error ? err.message : String(err)}`;

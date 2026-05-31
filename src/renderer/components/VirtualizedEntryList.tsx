@@ -32,6 +32,7 @@ interface StoredVirtuosoState {
 interface VirtualizedListContext {
   sessionId: string;
   isStreaming: boolean;
+  thinkingText: string;
   streamMetric: string;
   error: string | AgentError | null;
   onRetry: () => void;
@@ -85,7 +86,11 @@ function VirtualFooter({ context }: ContextProp<VirtualizedListContext>) {
   return (
     <div className="virtual-message-footer">
       {context.isStreaming && (
-        <StreamingBubble sessionId={context.sessionId} streamMetric={context.streamMetric} />
+        <StreamingBubble
+          sessionId={context.sessionId}
+          streamMetric={context.streamMetric}
+          thinkingText={context.thinkingText}
+        />
       )}
       {context.error && (
         <ErrorBlock
@@ -147,11 +152,12 @@ export const VirtualizedEntryList = memo(function VirtualizedEntryList({
   const context = useMemo<VirtualizedListContext>(() => ({
     sessionId,
     isStreaming,
+    thinkingText,
     streamMetric,
     error,
     onRetry,
     onOpenSettings,
-  }), [sessionId, isStreaming, streamMetric, error, onRetry, onOpenSettings]);
+  }), [sessionId, isStreaming, thinkingText, streamMetric, error, onRetry, onOpenSettings]);
 
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
     atBottomRef.current = atBottom;

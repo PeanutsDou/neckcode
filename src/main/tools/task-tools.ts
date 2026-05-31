@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 
 export interface Task {
   id: string;
@@ -13,6 +14,20 @@ export interface Task {
 }
 
 const tasks = new Map<string, Task>();
+const taskEvents = new EventEmitter();
+
+export function listTasksSnapshot(): Task[] {
+  return Array.from(tasks.values()).sort((a, b) => a.createdAt - b.createdAt).map(t => ({ ...t, blocks: [...t.blocks], blockedBy: [...t.blockedBy] }));
+}
+
+export function onTasksChanged(listener: (tasks: Task[]) => void): () => void {
+  taskEvents.on('changed', listener);
+  return () => taskEvents.off('changed', listener);
+}
+
+function emitChanged(): void {
+  taskEvents.emit('changed', listTasksSnapshot());
+}
 
 function getTask(id: string): Task | undefined {
   return tasks.get(id);
@@ -34,6 +49,7 @@ function taskCreate(args: Record<string, unknown>): string {
     createdAt: Date.now(),
   };
   tasks.set(id, task);
+  emitChanged();
   return JSON.stringify(task, null, 2);
 }
 
@@ -132,6 +148,7 @@ function taskUpdate(args: Record<string, unknown>): string {
   }
 
   if (changes.length === 0) return 'No changes.';
+  emitChanged();
 
   return JSON.stringify({
     message: `Updated: ${changes.join(', ')}`,

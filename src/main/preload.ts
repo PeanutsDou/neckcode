@@ -1,5 +1,5 @@
-// @ts-nocheck
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ElectronAPI } from '../shared/electron-api';
 
 console.log('[preload] loading...');
 
@@ -38,6 +38,11 @@ const api = {
     const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
     ipcRenderer.on('agent:tool-result', listener);
     return () => { ipcRenderer.removeListener('agent:tool-result', listener); };
+  },
+  onToolSummary: (cb: (sid: string, data: unknown) => void) => {
+    const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
+    ipcRenderer.on('agent:tool-summary', listener);
+    return () => { ipcRenderer.removeListener('agent:tool-summary', listener); };
   },
   onTurnDone: (cb: (sid: string, data: unknown) => void) => {
     const listener = (_event: unknown, sid: string, data: unknown) => cb(sid, data);
@@ -88,6 +93,12 @@ const api = {
   getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
   getAutoLaunch: () => ipcRenderer.invoke('auto-launch:get'),
   setAutoLaunch: (enabled: boolean) => ipcRenderer.invoke('auto-launch:set', enabled),
+
+  // Pet
+  getPetStatus: () => ipcRenderer.invoke('pet:status'),
+  togglePet: () => ipcRenderer.invoke('pet:toggle'),
+  getPetTheme: () => ipcRenderer.invoke('pet:theme'),
+  setPetTheme: (theme: string) => ipcRenderer.invoke('pet:set-theme', theme),
 
   // QuickLauncher
   quickLauncherShow: () => ipcRenderer.invoke('quick-launcher:show'),
@@ -166,7 +177,6 @@ const api = {
   clipboardWrite: (text: string) => ipcRenderer.invoke('clipboard:write', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   quickFindReadFile: (path: string) => ipcRenderer.invoke('quick-find:read-file', path),
-  clipboardWrite: (text: string) => ipcRenderer.invoke('clipboard:write', text),
 
   // Terminal
   startTerminal: () => ipcRenderer.invoke('terminal:start'),
@@ -216,6 +226,15 @@ const api = {
   readMemory: (path: string) => ipcRenderer.invoke('memory:read', path),
   writeMemory: (path: string, content: string) => ipcRenderer.invoke('memory:write', path, content),
   deleteMemory: (path: string) => ipcRenderer.invoke('memory:delete', path),
+  getSessionMemory: () => ipcRenderer.invoke('session-memory:get'),
+  getLayeredMemory: () => ipcRenderer.invoke('session-memory:get-layered'),
+  reloadSessionMemory: () => ipcRenderer.invoke('session-memory:reload'),
+  listTasks: () => ipcRenderer.invoke('tasks:list'),
+  onTasksUpdated: (cb: (tasks: unknown[]) => void) => {
+    const listener = (_event: unknown, tasks: unknown[]) => cb(tasks);
+    ipcRenderer.on('tasks:updated', listener);
+    return () => { ipcRenderer.removeListener('tasks:updated', listener); };
+  },
 
   // Ask user question
   onAskShow: (cb: (sessionId: string, askId: string, questions: unknown[]) => void) => {
@@ -241,6 +260,8 @@ const api = {
   // Permissions
   getPermissionMode: () => ipcRenderer.invoke('permission:get'),
   setPermissionMode: (mode: string) => ipcRenderer.invoke('permission:set', mode),
+  getPlanMode: () => ipcRenderer.invoke('plan-mode:status'),
+  togglePlanMode: () => ipcRenderer.invoke('plan-mode:toggle'),
 
   // Close dialog
   onCloseAsk: (cb: () => void) => {
@@ -276,15 +297,24 @@ const api = {
   imClearUnread: (peerUserId: any) => ipcRenderer.invoke('im:clear-unread', peerUserId),
 
   // IM events
-  onImAuthState: (cb: any) => { const l = (_, s) => cb(s); ipcRenderer.on('im:auth-state', l); return () => ipcRenderer.removeListener('im:auth-state', l); },
-  onImConnectionState: (cb: any) => { const l = (_, s) => cb(s); ipcRenderer.on('im:connection-state', l); return () => ipcRenderer.removeListener('im:connection-state', l); },
-  onImFriendsUpdated: (cb: any) => { const l = (_, d) => cb(d); ipcRenderer.on('im:friends-updated', l); return () => ipcRenderer.removeListener('im:friends-updated', l); },
-  onImFriendRequest: (cb: any) => { const l = (_, d) => cb(d); ipcRenderer.on('im:friend-request', l); return () => ipcRenderer.removeListener('im:friend-request', l); },
-  onImMessageNew: (cb: any) => { const l = (_, d) => cb(d); ipcRenderer.on('im:message-new', l); return () => ipcRenderer.removeListener('im:message-new', l); },
-  onImMessageUpdated: (cb: any) => { const l = (_, d) => cb(d); ipcRenderer.on('im:message-updated', l); return () => ipcRenderer.removeListener('im:message-updated', l); },
-  onImConversationUpdated: (cb: any) => { const l = (_, d) => cb(d); ipcRenderer.on('im:conversation-updated', l); return () => ipcRenderer.removeListener('im:conversation-updated', l); },
-  onImPresence: (cb: any) => { const l = (_, d) => cb(d); ipcRenderer.on('im:presence', l); return () => ipcRenderer.removeListener('im:presence', l); },
-  onImError: (cb: any) => { const l = (_, d) => cb(d); ipcRenderer.on('im:error', l); return () => ipcRenderer.removeListener('im:error', l); },
+  onImAuthState: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:auth-state', l); return () => ipcRenderer.removeListener('im:auth-state', l); },
+  onImConnectionState: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:connection-state', l); return () => ipcRenderer.removeListener('im:connection-state', l); },
+  onImFriendsUpdated: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:friends-updated', l); return () => ipcRenderer.removeListener('im:friends-updated', l); },
+  onImFriendRequest: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:friend-request', l); return () => ipcRenderer.removeListener('im:friend-request', l); },
+  onImMessageNew: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:message-new', l); return () => ipcRenderer.removeListener('im:message-new', l); },
+  onImMessageUpdated: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:message-updated', l); return () => ipcRenderer.removeListener('im:message-updated', l); },
+  onImConversationUpdated: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:conversation-updated', l); return () => ipcRenderer.removeListener('im:conversation-updated', l); },
+  onImPresence: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:presence', l); return () => ipcRenderer.removeListener('im:presence', l); },
+  onImError: (cb: (data: unknown) => void) => { const l = (_event: unknown, data: unknown) => cb(data); ipcRenderer.on('im:error', l); return () => ipcRenderer.removeListener('im:error', l); },
+
+  // Cost Tracking
+  getCostSummary: () => ipcRenderer.invoke('cost:summary'),
+  resetCost: () => ipcRenderer.invoke('cost:reset'),
+  onCostUpdated: (cb: (data: unknown) => void) => {
+    const listener = (_: unknown, data: unknown) => cb(data);
+    ipcRenderer.on('cost:updated', listener);
+    return () => ipcRenderer.removeListener('cost:updated', listener);
+  },
 
   // Auto-update
   onUpdateAvailable: (cb: (version: string) => void) => {
@@ -306,5 +336,5 @@ const api = {
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
 };
-contextBridge.exposeInMainWorld('electronAPI', api);
+contextBridge.exposeInMainWorld('electronAPI', api as ElectronAPI);
 console.log('[preload] electronAPI exposed');

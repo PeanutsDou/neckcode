@@ -34,40 +34,6 @@ interface QuickFindResult {
   favorite?: boolean;
 }
 
-declare global {
-  interface Window {
-    electronAPI?: {
-      quickLauncherHide?: () => Promise<void>;
-      quickLauncherGetState?: () => Promise<{ mode: LauncherMode; inputAutoHideMs: number; panelAutoHideMs: number }>;
-      quickLauncherSetMode?: (mode: LauncherMode) => Promise<void>;
-      quickLauncherSetExpanded?: (expanded: boolean) => Promise<void>;
-      onQuickLauncherShow?: (cb: () => void) => () => void;
-      onQuickLauncherHide?: (cb: () => void) => () => void;
-      quickChatSend?: (message: string) => Promise<{ ok?: boolean; error?: string }>;
-      quickChatAbort?: () => Promise<void>;
-      quickChatClear?: () => Promise<void>;
-      quickChatSaveSession?: () => Promise<{ ok?: boolean; sessionId?: string; error?: string }>;
-      onQuickChatUser?: (cb: (entry: QuickEntry) => void) => () => void;
-      onQuickChatDelta?: (cb: (text: string) => void) => () => void;
-      onQuickChatDone?: (cb: (data: { text?: string }) => void) => () => void;
-      onQuickChatRunStatus?: (cb: (status: RunStatus) => void) => () => void;
-      onQuickChatToolStart?: (cb: (entry: QuickEntry) => void) => () => void;
-      onQuickChatToolResult?: (cb: (data: { toolCallId?: string; result?: string }) => void) => () => void;
-      onQuickChatError?: (cb: (error: { message?: string; suggestion?: string }) => void) => () => void;
-      onQuickChatCleared?: (cb: () => void) => () => void;
-      onQuickChatSaved?: (cb: (data: { sessionId?: string }) => void) => () => void;
-      onQuickChatSaveError?: (cb: (data: { message?: string }) => void) => () => void;
-      quickFindLocalSearch?: (query: string) => Promise<QuickFindResult[]>;
-      quickFindAgentSearch?: (query: string) => Promise<QuickFindResult[]>;
-      quickFindOpen?: (path: string, reveal?: boolean) => Promise<{ ok?: boolean; error?: string }>;
-      getConfig?: () => Promise<{ quickLauncher?: { favorites?: string[] } }>;
-      setConfig?: (key: string, value: unknown) => Promise<void>;
-      clipboardWrite?: (text: string) => Promise<void>;
-      quickFindReadFile?: (path: string) => Promise<{ ok?: boolean; content?: string; size?: number; error?: string }>;
-    };
-  }
-}
-
 function phaseText(status: RunStatus, loading: boolean): string {
   if (!loading && (!status.phase || status.phase === 'idle')) return '';
   if (status.phase === 'requesting_model') return '请求模型中';

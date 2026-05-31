@@ -7,6 +7,7 @@ import { useChatStore } from '../stores/chat-store';
 import { DiffPreview } from './DiffPreview';
 import { MermaidBlock } from './MermaidBlock';
 import { ToolCallCard } from './ToolCallCard';
+import { ToolSummaryCard } from './ToolSummaryCard';
 import { inferImageMimeType } from '../utils/attachments';
 
 interface Props {
@@ -107,6 +108,22 @@ export const MessageBubble = memo(function MessageBubble({ entry }: Props) {
       )}
     </div>
   );
+
+  if (entry.role === 'system' && entry.toolSummary) {
+    return (
+      <div className="message message-tool">
+        <ToolSummaryCard summary={entry.content} tools={entry.toolSummary} />
+      </div>
+    );
+  }
+
+  if (entry.role === 'system') {
+    return (
+      <div className="message message-system" style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 14px' }}>
+        <div className="message-content">{entry.content}</div>
+      </div>
+    );
+  }
 
   if (entry.role === 'tool') {
     let diffData: { status: string; file: string; line: number; old: string; new: string } | null = null;

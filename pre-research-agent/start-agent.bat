@@ -1,4 +1,2 @@
 @echo off
-cd /d "%~dp0"
-python3 agent.py
-pause
+call "%~dp0neck.bat" %*

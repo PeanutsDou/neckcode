@@ -12,6 +12,8 @@ import { notebookEdit } from './notebook-edit';
 import { skillHandlers } from './skill-tools';
 import { getAgents } from '../config';
 import type { AgentConfig } from '../../shared/types';
+import { PLAN_MODE_TOOLS, planModeHandlers, filterPlanModeTools, isPlanMode } from '../plan-mode';
+import { LSP_TOOL_DEFINITIONS, createLspToolHandlers } from '../lsp/lsp-tools';
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -101,7 +103,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read a UTF-8 text file. Default permission restricts paths to the workspace; full access allows absolute local paths.',
+      description: 'Read a UTF-8 text file. Use this to verify actual source before explaining or editing. Prefer reading the smallest relevant files or ranges of files discovered by grep/glob/list_dir. Default permission restricts paths to the workspace; full access allows absolute local paths.',
       parameters: {
         type: 'object',
         properties: {
@@ -116,7 +118,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Write a UTF-8 text file. Default permission restricts paths to the workspace and asks for confirmation; full access allows absolute local paths without confirmation.',
+      description: 'Write a complete UTF-8 file. Use only when creating a new file or replacing a whole file is simpler and safer than targeted edits. Keep generated code plain, minimal, and maintainable. Default permission restricts paths to the workspace and asks for confirmation; full access allows absolute local paths without confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -132,7 +134,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'list_dir',
-      description: 'List files and folders. Default permission restricts paths to the workspace; full access allows absolute local paths.',
+      description: 'List files and folders to understand real project structure before choosing files to read or edit. Use this early when the relevant paths are uncertain. Default permission restricts paths to the workspace; full access allows absolute local paths.',
       parameters: {
         type: 'object',
         properties: {
@@ -146,7 +148,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'delete_file',
-      description: 'Delete a file. Default permission restricts paths to the workspace and asks for confirmation; full access allows absolute local paths without confirmation.',
+      description: 'Delete a file. Use only when deletion is explicitly needed and supported by investigation; avoid deleting generated or user files speculatively. Default permission restricts paths to the workspace and asks for confirmation; full access allows absolute local paths without confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -161,7 +163,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'run_shell',
-      description: 'Run a shell command. Default permission asks for confirmation and runs from the workspace root; full access runs without confirmation.',
+      description: 'Run a shell command from the workspace root. Prefer read-only diagnostic commands first (typecheck, tests, git status, directory inspection). Avoid destructive commands unless explicitly required and confirmed. If a command fails, inspect the output and change strategy instead of repeating it. Default permission asks for confirmation; full access runs without confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -176,7 +178,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'edit_file',
-      description: 'Make exact string replacements in an existing file. The old_string must uniquely match the text to replace.',
+      description: 'Make a targeted exact string replacement in an existing file. Use this for minimal, maintainable edits after reading the actual file. The old_string must uniquely match the text to replace; include enough surrounding context to avoid accidental edits.',
       parameters: {
         type: 'object',
         properties: {
@@ -193,7 +195,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'glob',
-      description: 'Find files matching a glob pattern. Supports *, **, ?, [abc] patterns.',
+      description: 'Find files matching a glob pattern. Use this to locate candidate files before reading or editing. Supports *, **, ?, [abc] patterns.',
       parameters: {
         type: 'object',
         properties: {
@@ -208,7 +210,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'grep',
-      description: 'Search for a regex pattern in files. Returns matching lines with file paths and line numbers.',
+      description: 'Search actual project text with a regex. Use this before making claims about APIs, symbols, components, config keys, or call sites. Returns matching lines with file paths and line numbers.',
       parameters: {
         type: 'object',
         properties: {
@@ -240,7 +242,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'everything_search',
-      description: 'Search local Windows files and directories using Everything. Use this for fast whole-disk filename/path searches when the user asks to find a file, folder, project, document, or recently mentioned local asset. Separate multiple keywords with spaces.',
+      description: 'Search local Windows files and directories using Everything. Use this for fast whole-disk filename/path searches when the needed file, folder, project, document, or asset may be outside the workspace. Separate multiple keywords with spaces.',
       parameters: {
         type: 'object',
         properties: {
@@ -270,7 +272,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'task_create',
-      description: 'Create a new task. Returns the task with a unique ID. Use this to break complex work into trackable steps.',
+      description: 'Create a new task. Use this to break complex work into small, trackable steps when the work has multiple dependent parts. Keep task descriptions concrete and evidence-based.',
       parameters: {
         type: 'object',
         properties: {
@@ -365,7 +367,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'invoke_skill',
-      description: 'Load a SKILL.md skill into the conversation. Call this when a loaded skill is relevant to the task.',
+      description: 'Load a SKILL.md skill into the conversation. Call this when a loaded skill is clearly relevant to the task; do not invoke unrelated skills speculatively.',
       parameters: {
         type: 'object',
         properties: {
@@ -381,7 +383,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'ask_user_question',
-      description: 'Ask the user one or more questions when you need clarification or decisions. Each question can have multiple options.',
+      description: 'Ask the user one or more questions only when the answer cannot be discovered by inspecting the project and a wrong assumption would materially affect the result. Each question can have multiple options.',
       parameters: {
         type: 'object',
         properties: {
@@ -396,7 +398,7 @@ const DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'invoke_agent',
-      description: '调用已配置的专属 Agent 执行任务。可同时并行调用多个 Agent。每个子 Agent 拥有独立上下文。',
+      description: '调用已配置的专属 Agent 执行任务。适合把明确、独立、可验证的子任务交给专门 Agent；任务描述必须包含目标、相关文件/证据、约束和期望输出。可并行调用多个 Agent，每个子 Agent 拥有独立上下文。',
       parameters: {
         type: 'object',
         properties: {
@@ -408,11 +410,58 @@ const DEFINITIONS: ToolDefinition[] = [
     },
     readOnly: true,
   },
+  ...PLAN_MODE_TOOLS,
+  ...LSP_TOOL_DEFINITIONS,
 ];
 
 import type { PermissionMode } from '../../shared/permissions';
 
+/** Callback type for external tool injection (e.g. MCP). */
+export type ExternalToolsProvider = () => ToolDefinition[];
+export type McpToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
+
 const CONFIRM_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'notebook_edit']);
+const PLAN_MODE_BLOCKED_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'notebook_edit']);
+const DIAGNOSTIC_AFTER_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'notebook_edit']);
+
+const TOOL_SEARCH_DEFINITION: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'tool_search',
+    description: 'Search deferred external tools and make selected tool schemas available on the next model step. Use this when an integration/MCP capability may exist but is not in the current tool list. Query by server, action, or tool name; use select:<tool_name> for direct selection.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search terms, or select:<exact_tool_name>.' },
+        max_results: { type: 'number', description: 'Maximum result count. Default 5.' },
+      },
+      required: ['query'],
+    },
+  },
+  readOnly: true,
+};
+
+function searchToolDefinitions(query: string, tools: ToolDefinition[], maxResults: number): ToolDefinition[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [];
+  if (normalized.startsWith('select:')) {
+    const wanted = normalized.slice('select:'.length).trim();
+    return tools.filter(tool => tool.function.name.toLowerCase() === wanted).slice(0, 1);
+  }
+  const terms = normalized.split(/\s+/).filter(Boolean);
+  const scored = tools.map(tool => {
+    const haystack = `${tool.function.name} ${tool.function.description}`.toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (tool.function.name.toLowerCase() === term) score += 20;
+      if (tool.function.name.toLowerCase().includes(term)) score += 8;
+      if (haystack.includes(term)) score += 3;
+    }
+    return { tool, score };
+  }).filter(item => item.score > 0);
+  scored.sort((a, b) => b.score - a.score || a.tool.function.name.localeCompare(b.tool.function.name));
+  return scored.slice(0, maxResults).map(item => item.tool);
+}
 
 function buildInvokeAgentDefinition(definition: ToolDefinition, agents: AgentConfig[]): ToolDefinition {
   const parameterSchema = definition.function.parameters as {
@@ -466,8 +515,11 @@ export function createToolRegistry(
   askHandler?: (questions: Array<{ question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }>) => Promise<Record<string, string>>,
   getPermissionMode?: () => PermissionMode,
   invokeAgent?: (args: Record<string, unknown>, context?: ToolRunContext | null) => Promise<string>,
+  getExternalTools?: ExternalToolsProvider,
+  executeExternalTool?: McpToolExecutor,
 ): ToolRegistry {
   let currentRunContext: ToolRunContext | null = null;
+  const selectedDeferredTools = new Set<string>();
   const needsConfirm = (toolName: string, args: Record<string, unknown>): boolean => {
     const mode = getPermissionMode?.() || 'default';
     void args;
@@ -478,6 +530,28 @@ export function createToolRegistry(
   const resolveToolPath = (inputPath?: string) => ensurePath(workspaceRoot, inputPath, canAccessAllPaths());
 
   const handlers: Record<string, (args: Record<string, unknown>) => Promise<string>> = {
+    ...createLspToolHandlers(workspaceRoot),
+
+    async tool_search(args) {
+      const query = String(args.query || '');
+      const maxResults = Math.max(1, Math.min(20, Number(args.max_results || 5)));
+      const deferred = getExternalTools?.() || [];
+      const matches = searchToolDefinitions(query, deferred, maxResults);
+      for (const match of matches) selectedDeferredTools.add(match.function.name);
+      return JSON.stringify({
+        query,
+        matches: matches.map(match => ({
+          name: match.function.name,
+          description: match.function.description,
+          selected: true,
+        })),
+        total_deferred_tools: deferred.length,
+        note: matches.length > 0
+          ? 'Selected tool schemas will be available on the next model step.'
+          : 'No matching deferred tools found.',
+      }, null, 2);
+    },
+
     async read_file(args) {
       const p = resolveToolPath(args.path as string);
       const content = await fs.readFile(p, 'utf8');
@@ -811,6 +885,10 @@ export function createToolRegistry(
       return await invokeAgent(args, currentRunContext);
     },
 
+    // Plan mode handlers
+    async enter_plan_mode(args) { return planModeHandlers.enter_plan_mode(args); },
+    async exit_plan_mode(args) { return planModeHandlers.exit_plan_mode(args); },
+
     async ask_user_question(args) {
       if (!askHandler) return 'ERROR: UI not available for questions.';
 
@@ -841,13 +919,17 @@ export function createToolRegistry(
   return {
     getDefinitions() {
       const agents = getAgents().filter(agent => (agent.name.trim() || agent.id.trim()) && agent.model.trim());
-      return DEFINITIONS
+      const builtins = [...DEFINITIONS, TOOL_SEARCH_DEFINITION]
         .filter(def => {
           if (def.function.name === 'ask_user_question' && !askHandler) return false;
           if (def.function.name === 'invoke_agent' && (!invokeAgent || agents.length === 0)) return false;
           return true;
         })
         .map(def => def.function.name === 'invoke_agent' ? buildInvokeAgentDefinition(def, agents) : def);
+      const externals = (getExternalTools?.() || [])
+        .filter(tool => selectedDeferredTools.has(tool.function.name));
+      const allTools = [...builtins, ...externals];
+      return filterPlanModeTools(allTools);
     },
 
     setRunContext(context) {
@@ -855,13 +937,33 @@ export function createToolRegistry(
     },
 
     async execute(toolCall: ToolCall): Promise<string> {
+      const mode = getPermissionMode?.() || 'default';
+      const inPlanMode = mode === 'plan' || isPlanMode();
+
+      if (inPlanMode) {
+        if (toolCall.name.startsWith('mcp__')) {
+          return `ERROR: Plan mode is read-only and blocks external MCP tool execution: ${toolCall.name}`;
+        }
+        if (PLAN_MODE_BLOCKED_TOOLS.has(toolCall.name)) {
+          return `ERROR: Plan mode is read-only and blocks tool execution: ${toolCall.name}`;
+        }
+      }
+
+      // Route mcp__* tools to external executor
+      if (toolCall.name.startsWith('mcp__') && executeExternalTool) {
+        try {
+          const args = safeJson(toolCall.argumentsText);
+          return await executeExternalTool(toolCall.name, args);
+        } catch (err) {
+          return `ERROR: MCP tool ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
       const handler = handlers[toolCall.name];
       if (!handler) {
         return `ERROR: Unknown tool "${toolCall.name}"`;
       }
       try {
         const args = safeJson(toolCall.argumentsText);
-        const mode = getPermissionMode?.() || 'default';
 
         if (mode === 'default' && toolCall.name === 'run_shell' && commandEscapesWorkspace(String(args.command || ''), workspaceRoot)) {
           return 'ERROR: 默认权限下命令只能在工作区内工作。切换到“完全访问”后才能引用工作区外路径。';
@@ -875,7 +977,16 @@ export function createToolRegistry(
           }
         }
 
-        return await handler(args);
+        const result = await handler(args);
+        if (DIAGNOSTIC_AFTER_WRITE_TOOLS.has(toolCall.name)) {
+          const diagnostics = await createLspToolHandlers(workspaceRoot)
+            .lsp_diagnostics({})
+            .catch(() => '');
+          if (diagnostics && diagnostics !== 'No diagnostics.') {
+            return `${result}\n\n[Post-write diagnostics]\n${diagnostics}`;
+          }
+        }
+        return result;
       } catch (err) {
         return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
       }

@@ -6,11 +6,13 @@ import { useChatStore } from '../stores/chat-store';
 interface Props {
   sessionId: string;
   streamMetric: string;
+  thinkingText: string;
 }
 
-export function StreamingBubble({ sessionId, streamMetric }: Props) {
+export function StreamingBubble({ sessionId, streamMetric, thinkingText }: Props) {
   const statusRef = useRef<HTMLDivElement>(null);
   const [previewText, setPreviewText] = useState('');
+  const [showThinking, setShowThinking] = useState(false);
   const lastPreview = useRef('');
 
   // Direct DOM update for status bar — zero React cost
@@ -38,7 +40,23 @@ export function StreamingBubble({ sessionId, streamMetric }: Props) {
       <div className="streaming-head">
         <span className="streaming-spark" />
         <div ref={statusRef} className="streaming-status">{streamMetric}</div>
+        {thinkingText && (
+          <button
+            type="button"
+            className="streaming-thinking-toggle"
+            onClick={() => setShowThinking(v => !v)}
+          >
+            {showThinking ? '收起思考' : '展开思考'}
+          </button>
+        )}
       </div>
+      {showThinking && thinkingText && (
+        <div className="streaming-thinking-panel">
+          <ReactMarkdown remarkPlugins={[remarkBreaks]}>
+            {thinkingText}
+          </ReactMarkdown>
+        </div>
+      )}
       {previewText && (
         <div className="message-content">
           <ReactMarkdown remarkPlugins={[remarkBreaks]}>

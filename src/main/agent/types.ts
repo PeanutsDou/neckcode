@@ -77,6 +77,7 @@ export interface AgentCallbacks {
   onReasoning?: (text: string) => void;
   onToolStart?: (toolCall: ToolCall) => void;
   onToolResult?: (toolCall: ToolCall, result: string) => void;
+  onToolSummary?: (summary: string, tools: Array<{ name: string; argumentsText: string; result: string }>) => void;
   takeQueuedUserMessage?: () => QueuedUserMessage | null;
   onQueuedUserMessage?: (message: QueuedUserMessage) => void;
   onComplete?: (result: RunStepResult) => void;

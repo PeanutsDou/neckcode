@@ -210,8 +210,17 @@ export class ChatSession {
   replaceWithCompactSummary(summary: string, recentMessages: Message[]): void {
     this.messages = [
       {
-        role: 'system',
-        content: `[Compact boundary]\nPrior conversation was summarized to preserve context.\n\n${summary}`,
+        role: 'user',
+        content: [
+          '[Compact boundary] Prior conversation was summarized to preserve context.',
+          '',
+          '## Summary',
+          '',
+          summary,
+          '',
+          '---',
+          'Continue the conversation from where it left off. Do not acknowledge the summary, do not recap what was happening, do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened. Do not ask the user what to do — resume directly from the summary above.',
+        ].join('\n'),
       },
       ...recentMessages,
     ];

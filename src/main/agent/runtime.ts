@@ -31,6 +31,18 @@ export interface Provider {
 export interface ToolRunContext {
   userMessage: string;
   attachments: Attachment[];
+  sessionId?: string;
+}
+
+function summarizeToolBatch(tools: Array<{ name: string; argumentsText: string; result: string }>): string {
+  if (tools.length === 0) return '';
+  if (tools.length === 1) {
+    const tool = tools[0];
+    return `${tool.name} completed`;
+  }
+  const counts = new Map<string, number>();
+  for (const tool of tools) counts.set(tool.name, (counts.get(tool.name) || 0) + 1);
+  return Array.from(counts.entries()).map(([name, count]) => count > 1 ? `${name} x${count}` : name).join(', ') + ' completed';
 }
 
 export interface ToolRegistry {
@@ -76,7 +88,7 @@ export class AgentRuntime {
     this.session.removeLastUserTurn();
   }
 
-  private appendQueuedUserMessages(callbacks: AgentCallbacks): void {
+  private appendQueuedUserMessages(callbacks: AgentCallbacks, sessionId?: string): void {
     while (true) {
       const queued = callbacks.takeQueuedUserMessage?.();
       if (!queued) return;
@@ -84,14 +96,15 @@ export class AgentRuntime {
       this.tools.setRunContext?.({
         userMessage: queued.content,
         attachments: queued.attachments,
+        sessionId,
       });
       callbacks.onQueuedUserMessage?.(queued);
     }
   }
 
-  async runUserTurn(userMessage: string, attachments: Attachment[], callbacks: AgentCallbacks, signal?: AbortSignal): Promise<RunStepResult> {
+  async runUserTurn(userMessage: string, attachments: Attachment[], callbacks: AgentCallbacks, signal?: AbortSignal, sessionId?: string): Promise<RunStepResult> {
     let checkpoint = -1;
-    this.tools.setRunContext?.({ userMessage, attachments });
+    this.tools.setRunContext?.({ userMessage, attachments, sessionId });
 
     try {
       checkpoint = this.session.createCheckpoint();
@@ -102,7 +115,7 @@ export class AgentRuntime {
           throw new Error('Aborted');
         }
 
-        this.appendQueuedUserMessages(callbacks);
+        this.appendQueuedUserMessages(callbacks, sessionId);
         await this.contextManager.compactIfNeeded(this.session, this.provider, callbacks.onContextUpdate, signal);
         callbacks.onModelRequest?.();
         const step = await this.provider.runStep({
@@ -125,6 +138,7 @@ export class AgentRuntime {
 
         const batches = partitionToolCalls(step.toolCalls, this.tools.getDefinitions());
         for (const batch of batches) {
+          const completedTools: Array<{ name: string; argumentsText: string; result: string }> = [];
           if (batch.concurrent) {
             // Read-only tools: execute concurrently, preserve order
             const results = await Promise.all(
@@ -135,6 +149,7 @@ export class AgentRuntime {
               })
             );
             for (const { tc, result } of results) {
+              completedTools.push({ name: tc.name, argumentsText: tc.argumentsText, result });
               this.session.addToolResult(tc.id, result);
               callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
               callbacks.onToolResult?.(tc, result);
@@ -144,14 +159,16 @@ export class AgentRuntime {
             for (const tc of batch.calls) {
               callbacks.onToolStart?.(tc);
               const result = await this.tools.execute(tc);
+              completedTools.push({ name: tc.name, argumentsText: tc.argumentsText, result });
               this.session.addToolResult(tc.id, result);
               callbacks.onContextUpdate?.(this.contextManager.getStatus(this.session));
               callbacks.onToolResult?.(tc, result);
             }
           }
+          callbacks.onToolSummary?.(summarizeToolBatch(completedTools), completedTools);
         }
 
-        this.appendQueuedUserMessages(callbacks);
+        this.appendQueuedUserMessages(callbacks, sessionId);
       }
 
       throw new Error(`Agent stopped after ${this.maxTurns} turns`);
