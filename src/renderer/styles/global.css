@@ -156,6 +156,7 @@ html, body {
   background: var(--bg-primary);
   color: var(--text-primary);
   overflow: hidden;
+  -webkit-app-region: no-drag;
 }
 
 #root {
@@ -189,15 +190,11 @@ html, body {
   display: flex;
   align-items: center;
   gap: 6px;
-  -webkit-app-region: no-drag;
 }
 
 .toolbar-center {
   flex: 1;
-  min-width: 40px;
   height: 100%;
-  -webkit-app-region: drag;
-  cursor: grab;
 }
 
 .toolbar-icon {
@@ -224,6 +221,7 @@ html, body {
   border-radius: 4px;
   transition: all 0.15s;
   font-family: var(--font-sans);
+  -webkit-app-region: no-drag;
 }
 
 .toolbar-btn:hover {
@@ -252,6 +250,7 @@ html, body {
   font-size: 12px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 8px rgba(0, 0, 0, 0.04);
   transition: width 0.16s, background 0.16s, border-color 0.16s, color 0.16s;
+  -webkit-app-region: no-drag;
 }
 
 .im-island-btn:hover,
@@ -356,6 +355,7 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.1);
+  -webkit-app-region: no-drag;
 }
 
 .appearance-menu-title {

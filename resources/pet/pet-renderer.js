@@ -15,11 +15,29 @@
     sleeping: 'Zzz...'
   };
 
+  // ── React-drag asset map per theme ──
+  var reactAssets = {
+    clawd: 'clawd-react-drag.svg',
+    calico: 'calico-react-drag.apng',
+    cloudling: 'cloudling-react-drag.svg'
+  };
+
+  // Track hover state for interaction
+  var prevState = 'idle';
+  var prevFile = '';
+  var isHovered = false;
+
   function isApng(file) {
     return file && file.toLowerCase().endsWith('.apng');
   }
 
-  function setState(state, file, theme) {
+  function setState(state, file, theme, skipHover) {
+    // On hover our stored prevState tracks the real state; don't overwrite it
+    if (!skipHover) {
+      prevState = state;
+      prevFile = file;
+    }
+
     var themeChanged = theme !== currentTheme;
     currentTheme = theme;
     currentFile = file;
@@ -84,6 +102,28 @@
     });
   }
 
+  // ── Hover interaction ────────────────────────────────
+  function enterHover() {
+    if (isHovered) return;
+    isHovered = true;
+    document.body.classList.add('hovered');
+    document.body.classList.remove('dragging');
+    // Switch to react-drag animation for interactive feel
+    var reactFile = reactAssets[currentTheme];
+    if (reactFile) setState('react', reactFile, currentTheme, true);
+  }
+
+  function leaveHover() {
+    if (!isHovered) return;
+    isHovered = false;
+    document.body.classList.remove('hovered');
+    // Restore previous real state
+    setState(prevState, prevFile, currentTheme, true);
+  }
+
+  container.addEventListener('mouseenter', enterHover);
+  container.addEventListener('mouseleave', leaveHover);
+
   // ── Drag to move ──────────────────────────────────────
   var dragging = false, dragStartX = 0, dragStartY = 0;
 
@@ -91,7 +131,8 @@
     dragging = true;
     dragStartX = e.screenX;
     dragStartY = e.screenY;
-    document.body.style.cursor = 'grabbing';
+    document.body.classList.add('dragging');
+    document.body.classList.remove('hovered');
   });
 
   document.addEventListener('mousemove', function(e) {
@@ -107,18 +148,20 @@
     }
   });
 
-  document.addEventListener('mouseup', function() {
+  function stopDrag() {
+    if (!dragging) return;
     dragging = false;
-    document.body.style.cursor = 'default';
-  });
+    document.body.classList.remove('dragging');
+  }
+
+  document.addEventListener('mouseup', stopDrag);
 
   document.addEventListener('mouseleave', function() {
-    dragging = false;
-    document.body.style.cursor = 'default';
+    stopDrag();
+    leaveHover();
   });
 
   petEl.style.opacity = '1';
-  document.body.style.cursor = 'default';
 
   // ── Speech bubble ─────────────────────────────────────
   var bubbleEl = document.getElementById('pet-bubble');
@@ -130,10 +173,10 @@
     });
   }
 
-  // Clear bubble when returning to idle or finishing
+  // Clear bubble when returning to idle or attention (only for non-hover state)
   var _origSetState = setState;
-  setState = function(state, file, theme) {
-    _origSetState(state, file, theme);
+  setState = function(state, file, theme, skipHover) {
+    _origSetState(state, file, theme, skipHover);
     if (state === 'idle' || state === 'attention') {
       setTimeout(function() { bubbleEl.style.opacity = '0'; }, 2500);
     }

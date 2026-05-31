@@ -131,12 +131,14 @@ function buildFullPrompt(): string {
   const parts = [cfg.systemPrompt];
   const workspaceRoot = cfg.agent.workspaceRoot;
   const layeredMemory = getCachedLayeredMemoryContent(workspaceRoot);
-  if (!layeredMemory.session && !layeredMemory.project && !layeredMemory.user) {
+  if (!layeredMemory.project && !layeredMemory.user) {
     void preloadLayeredMemoryContent(workspaceRoot).catch(() => {});
   }
+  // Project & user memory are static config — safe to inject.
   if (layeredMemory.project) parts.push('## Project Memory\n\n' + layeredMemory.project);
   if (layeredMemory.user) parts.push('## User Preferences Memory\n\n' + layeredMemory.user);
-  if (layeredMemory.session) parts.push('## Session Memory\n\n' + layeredMemory.session);
+  // Session memory is NOT injected here — it grows dynamically and
+  // would bloat every API call. The model already has conversation history.
   if (agentMdContent) parts.push(agentMdContent);
   const skillsPrompt = buildSkillsPrompt();
   if (skillsPrompt) parts.push(skillsPrompt);

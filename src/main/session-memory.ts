@@ -14,12 +14,39 @@ const lastExtractionMessageCount = new Map<string, number>();
 const extractionInProgress = new Set<string>();
 let cachedMemoryContent: string | null = null;
 let cachedWorkspaceRoot = '';
+let cachedMemoryMtime = 0;
 let cachedProjectMemoryContent: string | null = null;
 let cachedUserPreferenceContent: string | null = null;
 
 // ── Thresholds ──
 const MESSAGE_COUNT_THRESHOLD = 8;   // min messages between extractions
 const TOKEN_THRESHOLD = 8000;         // min estimated tokens between extractions
+
+// ── Limits ──
+const MAX_SESSION_MEMORY_INJECT_TOKENS = 4000;   // max tokens injected into prompt
+const MAX_SESSION_MEMORY_FILE_CHARS = 8000;       // hard cap on SESSION_MEMORY.md file size
+const MAX_EXISTING_IN_PROMPT = 6000;              // truncate existing memory in extraction prompt
+const MAX_CONVERSATION_IN_PROMPT = 8000;          // truncate conversation summary in extraction prompt
+const MAX_SESSION_MEMORY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days auto-clear
+
+// ── Helpers ──
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function applyInjectionLimit(content: string): string {
+  if (!content) return '';
+  const maxChars = MAX_SESSION_MEMORY_INJECT_TOKENS * 4;
+  if (content.length <= maxChars) return content;
+  return content.slice(0, maxChars) +
+    `\n\n<!-- 会话记忆过长 (${estimateTokens(content)} tokens)，已截断至 ${MAX_SESSION_MEMORY_INJECT_TOKENS} tokens -->`;
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (!text || text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + '\n\n[内容过长，已截断]';
+}
 
 // ── Path ──
 export function getSessionMemoryPath(workspaceRoot: string): string {
@@ -77,22 +104,27 @@ export async function extractSessionMemory(
       existing = '# Session Memory\n\n_Auto-generated summary of key information from this conversation._\n';
     }
 
-    // Build extraction prompt
-    const conversationSummary = buildConversationSummary(messages);
-    const prompt = `You are maintaining a session memory file. Below is the current memory file followed by the latest conversation. Update the memory file to include ALL important information — preferences, decisions, project structure, key files, TODO items, user notes, etc. Keep it concise but comprehensive.
+    // Truncate inputs to prevent unbounded growth of the extraction prompt itself
+    const truncatedExisting = truncateText(existing, MAX_EXISTING_IN_PROMPT);
+    const conversationSummary = truncateText(
+      buildConversationSummary(messages),
+      MAX_CONVERSATION_IN_PROMPT,
+    );
 
-## Current Memory File
-${existing}
-
-## Latest Conversation
-${conversationSummary}
-
-## Instructions
-1. Preserve all existing memory that is still relevant
-2. Add NEW important information from the latest conversation
-3. Remove outdated or contradicted information
-4. Keep the format as markdown with clear sections
-5. Output ONLY the updated memory file content, nothing else`;
+    const maxOutputChars = MAX_SESSION_MEMORY_FILE_CHARS;
+    const prompt = [
+      'You are maintaining a session memory file. Below is the current memory (possibly truncated) followed by the latest conversation.',
+      'Update the memory file to include ALL important information — preferences, decisions, project structure, key files, TODO items, user notes, etc.',
+      '',
+      `CRITICAL: The memory file MUST be under ${maxOutputChars} characters total. Be concise. If space is tight, drop the least important info first.`,
+      'Output ONLY the updated memory file content in markdown format, nothing else.',
+      '',
+      '## Current Memory File',
+      truncatedExisting || '(empty)',
+      '',
+      '## Latest Conversation',
+      conversationSummary || '(empty)',
+    ].join('\n');
 
     // Call the provider (lightweight, non-streaming)
     const provider = getProvider();
@@ -104,10 +136,16 @@ ${conversationSummary}
       model: 'default',
     });
 
-    const updated = result.text.trim();
+    let updated = result.text.trim();
+    // Post-extraction: hard-truncate output to file size cap
+    if (updated.length > MAX_SESSION_MEMORY_FILE_CHARS) {
+      updated = updated.slice(0, MAX_SESSION_MEMORY_FILE_CHARS) +
+        '\n\n<!-- 记忆超过上限，已截断 -->';
+    }
     if (updated.length > 100) {
       await fs.writeFile(memoryPath, updated, 'utf8');
       cachedMemoryContent = updated;
+      cachedMemoryMtime = Date.now();
       cachedWorkspaceRoot = workspaceRoot;
     }
 
@@ -122,7 +160,7 @@ ${conversationSummary}
 
 export function getCachedSessionMemoryContent(workspaceRoot: string): string {
   return cachedMemoryContent !== null && cachedWorkspaceRoot === workspaceRoot
-    ? cachedMemoryContent
+    ? applyInjectionLimit(cachedMemoryContent)
     : '';
 }
 
@@ -138,8 +176,17 @@ export function getCachedLayeredMemoryContent(workspaceRoot: string): {
   if (cachedWorkspaceRoot !== workspaceRoot) {
     return { session: '', project: '', user: '' };
   }
+  // Check 7-day expiry even on cache hit
+  if (cachedMemoryMtime > 0 && (Date.now() - cachedMemoryMtime) > MAX_SESSION_MEMORY_AGE_MS) {
+    const memoryPath = getSessionMemoryPath(workspaceRoot);
+    fs.unlink(memoryPath).catch(() => {});
+    cachedMemoryContent = null;
+    cachedMemoryMtime = 0;
+    console.log('[session-memory] Memory expired (>7 days), cleared from cache.');
+    return { session: '', project: cachedProjectMemoryContent || '', user: cachedUserPreferenceContent || '' };
+  }
   return {
-    session: cachedMemoryContent || '',
+    session: applyInjectionLimit(cachedMemoryContent || ''),
     project: cachedProjectMemoryContent || '',
     user: cachedUserPreferenceContent || '',
   };
@@ -171,15 +218,38 @@ export async function getLayeredMemoryContent(workspaceRoot: string): Promise<{
 
 export async function getSessionMemoryContent(workspaceRoot: string): Promise<string> {
   if (cachedMemoryContent !== null && cachedWorkspaceRoot === workspaceRoot) {
-    return cachedMemoryContent;
+    // Check 7-day expiry on cache hit
+    if (cachedMemoryMtime > 0 && (Date.now() - cachedMemoryMtime) > MAX_SESSION_MEMORY_AGE_MS) {
+      const memoryPath = getSessionMemoryPath(workspaceRoot);
+      await fs.unlink(memoryPath).catch(() => {});
+      cachedMemoryContent = null;
+      cachedMemoryMtime = 0;
+      console.log('[session-memory] Memory expired (>7 days), cleared.');
+      return '';
+    }
+    return applyInjectionLimit(cachedMemoryContent);
   }
 
   try {
     const memoryPath = getSessionMemoryPath(workspaceRoot);
+    const stat = await fs.stat(memoryPath);
+
+    // Check 7-day expiry based on file modification time
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs > MAX_SESSION_MEMORY_AGE_MS) {
+      await fs.unlink(memoryPath).catch(() => {});
+      cachedMemoryContent = null;
+      cachedMemoryMtime = 0;
+      cachedWorkspaceRoot = workspaceRoot;
+      console.log('[session-memory] Memory expired (>7 days), deleted file.');
+      return '';
+    }
+
     const content = await fs.readFile(memoryPath, 'utf8');
-    cachedMemoryContent = content;
+    cachedMemoryContent = content;      // cache full content (extraction needs it)
+    cachedMemoryMtime = stat.mtimeMs;   // track mtime for cache-hit expiry check
     cachedWorkspaceRoot = workspaceRoot;
-    return content;
+    return applyInjectionLimit(content); // truncate for injection
   } catch {
     return '';
   }
@@ -189,6 +259,7 @@ export function resetSessionMemory(): void {
   lastExtractionMessageCount.clear();
   extractionInProgress.clear();
   cachedMemoryContent = null;
+  cachedMemoryMtime = 0;
   cachedProjectMemoryContent = null;
   cachedUserPreferenceContent = null;
   cachedWorkspaceRoot = '';

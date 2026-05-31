@@ -422,7 +422,6 @@ export type McpToolExecutor = (name: string, args: Record<string, unknown>) => P
 
 const CONFIRM_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'notebook_edit']);
 const PLAN_MODE_BLOCKED_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'notebook_edit']);
-const DIAGNOSTIC_AFTER_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'notebook_edit']);
 
 const TOOL_SEARCH_DEFINITION: ToolDefinition = {
   type: 'function',
@@ -978,14 +977,6 @@ export function createToolRegistry(
         }
 
         const result = await handler(args);
-        if (DIAGNOSTIC_AFTER_WRITE_TOOLS.has(toolCall.name)) {
-          const diagnostics = await createLspToolHandlers(workspaceRoot)
-            .lsp_diagnostics({})
-            .catch(() => '');
-          if (diagnostics && diagnostics !== 'No diagnostics.') {
-            return `${result}\n\n[Post-write diagnostics]\n${diagnostics}`;
-          }
-        }
         return result;
       } catch (err) {
         return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
